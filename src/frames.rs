@@ -564,33 +564,49 @@ impl Frames {
             let panes = self.tabs_in_drawn_order(frame, open.panes());
             let active = open.active_pane();
 
-            // What a tab's place is measured against, so a strip that has been moved or
-            // resized is not read as every tab in it having moved.
-            let origin = ui.min_rect().left();
-            for pane in panes {
-                let Some(payload) = layout.pane(pane) else {
-                    continue;
-                };
-                let tab = view.tab(pane, payload);
-                self.draw_tab(
-                    ui,
-                    layout,
-                    events,
-                    frame,
-                    pane,
-                    &tab,
-                    active == Some(pane),
-                    origin,
-                );
-            }
-
-            // Right to left: the application's own controls take the outer edge, and the
-            // new-tab button sits between them and the last tab.
+            // Right to left first: the application's own controls take the outer edge and the
+            // new-tab button sits inside them, so both stay on screen however many tabs there
+            // are — what is left over is what the tabs are drawn, and scrolled, in.
             ui.with_layout(UiLayout::right_to_left(Align::Center), |ui| {
                 view.tab_strip_end(ui, frame, is_primary);
                 if self.new_tab_button && self.draw_new_tab_button(ui).clicked() {
                     events.push(FramesEvent::NewTabRequested(frame));
                 }
+
+                ui.with_layout(UiLayout::left_to_right(Align::Center), |ui| {
+                    // More tabs than the strip has room for scroll sideways under the
+                    // trackpad rather than vanish off the end. No bar is drawn: a strip has
+                    // no room for one, and the wheel is how the strip says it scrolls.
+                    egui::ScrollArea::horizontal()
+                        .id_salt(self.salt.with(("tab-scroll", frame)))
+                        .scroll_bar_visibility(
+                            egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                        )
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                // What a tab's place is measured against, so a strip that
+                                // has been moved, resized or scrolled is not read as every
+                                // tab in it having moved.
+                                let origin = ui.min_rect().left();
+                                for pane in panes {
+                                    let Some(payload) = layout.pane(pane) else {
+                                        continue;
+                                    };
+                                    let tab = view.tab(pane, payload);
+                                    self.draw_tab(
+                                        ui,
+                                        layout,
+                                        events,
+                                        frame,
+                                        pane,
+                                        &tab,
+                                        active == Some(pane),
+                                        origin,
+                                    );
+                                }
+                            });
+                        });
+                });
             });
         });
     }
