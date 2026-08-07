@@ -111,6 +111,10 @@ const SIDE_EDGE_FRACTION: f32 = 0.22;
 /// band, and reaching a bottom split would mean dragging to the window's very edge.
 const UP_DOWN_EDGE_FRACTION: f32 = 0.38;
 
+/// How long a tab takes to walk to a new place in its strip. Long enough to be followed by
+/// eye, short enough that the strip is never waiting on it.
+const TAB_SLIDE: f32 = 0.12;
+
 /// Space between the end of a tab's title and its close mark.
 const TAB_CLOSE_GAP: f32 = 5.0;
 const TAB_CLOSE_SIZE: f32 = 12.0;
@@ -156,6 +160,12 @@ pub struct Frames {
     /// the pointer keeps the spot it was grabbed by instead of snapping its corner to it.
     dragging: Option<PaneId>,
     grab_offset: Vec2,
+    /// Where the dragged tab would land: the frame whose strip it is over, and how many of
+    /// that strip's other tabs are to its left. Worked out at the end of a frame and read by
+    /// the next one, which is what lets a strip draw the tab where it is going instead of
+    /// where it came from — and so what makes the tabs around it move aside before the drop
+    /// rather than after it.
+    tab_landing: Option<(FrameId, usize)>,
     /// Where each frame, tab and pane body was drawn last time round.
     frame_rects: Vec<(FrameId, Rect)>,
     tab_rects: Vec<(FrameId, PaneId, Rect)>,
@@ -180,6 +190,7 @@ impl Frames {
             salt: Id::new("egui_frames"),
             dragging: None,
             grab_offset: Vec2::ZERO,
+            tab_landing: None,
             frame_rects: Vec::new(),
             tab_rects: Vec::new(),
             pane_rects: Vec::new(),
@@ -294,6 +305,14 @@ impl Frames {
         if self.dragging.is_some() {
             self.draw_workspace_drop_hint(ui, layout);
         }
+
+        // Worked out from what was just drawn, and read by the next frame. The tabs a dragged
+        // one is being put between move aside for it as it goes, so the drop changes nothing
+        // that was not already on screen.
+        self.tab_landing = self.dragging.and_then(|dragged| {
+            let at = ui.ctx().input(|input| input.pointer.hover_pos())?;
+            self.landing_for(layout, dragged, at)
+        });
 
         // A drag that ends anywhere resolves here, so releasing outside a frame simply cancels
         // rather than leaving the tab stuck to the pointer.
@@ -523,7 +542,7 @@ impl Frames {
         }
 
         if self.dragging.is_some() {
-            self.draw_drop_hint(ui, layout, frame, rect, strip_rect);
+            self.draw_drop_hint(ui, layout, rect, strip_rect);
         }
     }
 
@@ -542,15 +561,27 @@ impl Frames {
             let Some(open) = layout.frame(frame) else {
                 return;
             };
-            let panes = open.panes().to_vec();
+            let panes = self.tabs_in_drawn_order(frame, open.panes());
             let active = open.active_pane();
 
+            // What a tab's place is measured against, so a strip that has been moved or
+            // resized is not read as every tab in it having moved.
+            let origin = ui.min_rect().left();
             for pane in panes {
                 let Some(payload) = layout.pane(pane) else {
                     continue;
                 };
                 let tab = view.tab(pane, payload);
-                self.draw_tab(ui, layout, events, frame, pane, &tab, active == Some(pane));
+                self.draw_tab(
+                    ui,
+                    layout,
+                    events,
+                    frame,
+                    pane,
+                    &tab,
+                    active == Some(pane),
+                    origin,
+                );
             }
 
             // Right to left: the application's own controls take the outer edge, and the
@@ -564,11 +595,67 @@ impl Frames {
         });
     }
 
+    /// Draw a tab at the place the strip gives it, walking there from wherever it was drawn
+    /// last rather than appearing there.
+    ///
+    /// This is what makes the tabs a dragged one is being put between move out of its way
+    /// instead of jumping: the strip answers where each tab belongs, and this walks it there
+    /// over [`TAB_SLIDE`]. A tab that has not moved is drawn where it is with no work done,
+    /// and one drawn for the first time starts where it belongs rather than sliding in from
+    /// the left.
+    ///
+    /// The dragged tab is somewhere for a reason of its own — it is on the pointer — so it is
+    /// stamped where the strip puts it instead of walking there, which is what stops it being
+    /// seen sliding back from wherever it last sat.
     #[allow(
         clippy::too_many_arguments,
         reason = "a tab is drawn from its pane, its frame, and what the application named it"
     )]
     fn draw_tab<P>(
+        &mut self,
+        ui: &mut Ui,
+        layout: &mut Layout<P>,
+        events: &mut Vec<FramesEvent>,
+        frame: FrameId,
+        pane: PaneId,
+        tab: &Tab,
+        selected: bool,
+        origin: f32,
+    ) {
+        let id = self.salt.with(("tab-slide", pane));
+        let belongs_at = ui.cursor().left() - origin;
+        let drawn_at = if self.dragging == Some(pane) {
+            ui.ctx().animate_value_with_time(id, belongs_at, 0.0)
+        } else {
+            ui.ctx().animate_value_with_time(id, belongs_at, TAB_SLIDE)
+        };
+        let offset = drawn_at - belongs_at;
+
+        if offset.abs() < 0.5 {
+            self.draw_tab_body(ui, layout, events, frame, pane, tab, selected);
+            return;
+        }
+
+        // Drawn into a layer of its own so the shapes can be moved once they are made — the
+        // same way the dragged tab is. Its clip is moved the other way first, so a tab on its
+        // way between two places is still cut off at the strip it is in.
+        let layer_id = LayerId::new(Order::Middle, id.with("sliding"));
+        let clip = ui.clip_rect();
+        ui.scope_builder(UiBuilder::new().layer_id(layer_id), |ui| {
+            ui.set_clip_rect(clip.translate(vec2(-offset, 0.0)));
+            self.draw_tab_body(ui, layout, events, frame, pane, tab, selected);
+        });
+        ui.ctx().transform_layer_shapes(
+            layer_id,
+            egui::emath::TSTransform::from_translation(vec2(offset, 0.0)),
+        );
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a tab is drawn from its pane, its frame, and what the application named it"
+    )]
+    fn draw_tab_body<P>(
         &mut self,
         ui: &mut Ui,
         layout: &mut Layout<P>,
@@ -793,6 +880,14 @@ impl Frames {
         if !workspace.contains(at) || layout.frame_count() < 2 {
             return None;
         }
+        // A tab strip wins over the band down the outer edge. The band is deeper than a strip
+        // is tall, so without this every strip along the top of the workspace sits inside the
+        // top band — and a tab dropped on one could never join its tabs, only ever become a
+        // row above everything. Aiming at a strip is precise and means one thing; the band is
+        // a coarse gesture at the whole arrangement.
+        if self.over_a_tab_strip(at) {
+            return None;
+        }
 
         let sides = [
             (DropSide::Left, at.x - workspace.min.x),
@@ -806,27 +901,75 @@ impl Frames {
         (distance <= WORKSPACE_EDGE).then_some(side)
     }
 
-    /// Where a tab dropped on a frame's strip would be inserted: the pane it lands before,
-    /// `None` for the end of the strip, and the x a caret would mark that spot at.
-    fn tab_insertion(
+    /// Where a dragged tab would land, if it would land among some frame's tabs at all.
+    ///
+    /// Middle against middle, and against the tabs as they are drawn now with the dragged one
+    /// out of the reckoning — so carrying it over a tab cannot bounce between two answers.
+    /// A drag that would split a frame, or that is over the band down the outer edge, lands
+    /// among nobody's tabs and answers `None`.
+    fn landing_for<P>(
         &self,
-        frame: FrameId,
+        layout: &Layout<P>,
         dragged: PaneId,
-        strip_rect: Rect,
         at: Pos2,
-    ) -> (Option<PaneId>, f32) {
-        let mut after_last = strip_rect.min.x + FRAME_BORDER + self.style.tab_margin;
-        for (tab_frame, tab_pane, rect) in &self.tab_rects {
-            if *tab_frame != frame || *tab_pane == dragged {
-                continue;
-            }
-            if at.x < rect.center().x {
-                return (Some(*tab_pane), rect.min.x - self.style.tab_gap / 2.0);
-            }
-            after_last = rect.max.x + self.style.tab_gap / 2.0;
+    ) -> Option<(FrameId, usize)> {
+        if self.workspace_drop_side(layout, at).is_some() {
+            return None;
         }
-        (None, after_last)
+        let (frame, frame_rect) = self
+            .frame_rects
+            .iter()
+            .find(|(_, rect)| rect.contains(at))
+            .copied()?;
+        if drop_side(frame_rect, self.strip_rect_of(frame_rect), at)? != DropSide::Tabs {
+            return None;
+        }
+
+        let index = self
+            .tab_rects
+            .iter()
+            .filter(|(tab_frame, tab_pane, rect)| {
+                *tab_frame == frame && *tab_pane != dragged && rect.center().x < at.x
+            })
+            .count();
+        Some((frame, index))
     }
+
+    /// The tabs of a frame in the order they are drawn, with a tab being dragged over this
+    /// frame already moved to where it is being held — and taken out of whichever strip it
+    /// came from, if that is a different one.
+    ///
+    /// Until the tab is over some frame's strip there is nowhere for it to be but where it
+    /// came from, and taking it out of the strip for that stretch reads as a flicker.
+    fn tabs_in_drawn_order(&self, frame: FrameId, panes: &[PaneId]) -> Vec<PaneId> {
+        let (Some(dragged), Some((landing_frame, index))) = (self.dragging, self.tab_landing)
+        else {
+            return panes.to_vec();
+        };
+
+        let mut panes: Vec<PaneId> = panes.iter().copied().filter(|p| *p != dragged).collect();
+        if landing_frame == frame {
+            panes.insert(index.min(panes.len()), dragged);
+        }
+        panes
+    }
+
+    /// The strip along the top of a frame, which is where its tabs are drawn.
+    fn strip_rect_of(&self, frame_rect: Rect) -> Rect {
+        Rect::from_min_size(
+            frame_rect.min,
+            vec2(frame_rect.width(), self.style.tab_strip_height()),
+        )
+    }
+
+    /// Whether a point is on some frame's tab strip.
+    fn over_a_tab_strip(&self, at: Pos2) -> bool {
+        self.frame_rects
+            .iter()
+            .any(|(_, rect)| self.strip_rect_of(*rect).contains(at))
+    }
+
+
 
     /// The band down the edge of everything, shown while a dragged tab is over it.
     fn draw_workspace_drop_hint<P>(&self, ui: &mut Ui, layout: &Layout<P>) {
@@ -853,14 +996,7 @@ impl Frames {
     }
 
     /// While a tab is being dragged over a frame, show where it would land.
-    fn draw_drop_hint<P>(
-        &self,
-        ui: &mut Ui,
-        layout: &Layout<P>,
-        frame: FrameId,
-        rect: Rect,
-        strip_rect: Rect,
-    ) {
+    fn draw_drop_hint<P>(&self, ui: &mut Ui, layout: &Layout<P>, rect: Rect, strip_rect: Rect) {
         let Some(at) = ui.input(|input| input.pointer.hover_pos()) else {
             return;
         };
@@ -871,27 +1007,15 @@ impl Frames {
             return;
         };
 
-        // Landing among the tabs is a caret between two of them — the precise spot the tab
-        // takes — rather than a wash over the whole strip.
+        // Landing among the tabs needs nothing drawn: the strip has already opened a gap
+        // where the tab will go and slid its neighbours aside for it, which says the same
+        // thing in the place it is going to happen.
         if side == DropSide::Tabs {
-            let Some(dragged) = self.dragging else {
-                return;
-            };
-            let (_, x) = self.tab_insertion(frame, dragged, strip_rect, at);
-            let top = strip_rect.min.y + FRAME_BORDER + self.style.tab_margin;
-            ui.painter().rect_filled(
-                Rect::from_min_max(
-                    pos2(x - 1.0, top),
-                    pos2(x + 1.0, top + self.style.tab_height),
-                ),
-                CornerRadius::same(1),
-                self.style.accent,
-            );
             return;
         }
 
         let hint = match side {
-            DropSide::Tabs => strip_rect,
+            DropSide::Tabs => return,
             DropSide::Left => rect.with_max_x(rect.min.x + rect.width() * 0.5),
             DropSide::Right => rect.with_min_x(rect.min.x + rect.width() * 0.5),
             DropSide::Top => rect.with_max_y(rect.min.y + rect.height() * 0.5),
@@ -937,19 +1061,32 @@ impl Frames {
         else {
             return;
         };
-        let strip_rect = Rect::from_min_size(
-            frame_rect.min,
-            vec2(frame_rect.width(), self.style.tab_strip_height()),
-        );
+        let strip_rect = self.strip_rect_of(frame_rect);
         let Some(side) = drop_side(frame_rect, strip_rect, at) else {
             return;
         };
 
-        // Landing on a tab strip means "before whichever tab the pointer is left of" — the
-        // same spot the caret marked while the drag was in flight.
-        let before = (side == DropSide::Tabs)
-            .then(|| self.tab_insertion(frame, pane, strip_rect, at).0)
-            .flatten();
+        // Landing on a tab strip means landing in the gap the strip has been holding open, so
+        // the tab stays exactly where it was last seen rather than moving again on release.
+        let before = if side == DropSide::Tabs {
+            let index = match self.tab_landing {
+                Some((landing_frame, index)) if landing_frame == frame => index,
+                // The pointer arrived on this strip on the very frame it was let go of, so
+                // there was never a gap; where it is now is the best answer there is.
+                _ => self
+                    .landing_for(layout, pane, at)
+                    .map_or(0, |(_, index)| index),
+            };
+            layout.frame(frame).and_then(|open| {
+                open.panes()
+                    .iter()
+                    .copied()
+                    .filter(|open_pane| *open_pane != pane)
+                    .nth(index)
+            })
+        } else {
+            None
+        };
 
         layout.move_pane_to_frame(pane, frame, side, before);
     }
@@ -1112,6 +1249,97 @@ mod tests {
             drop_side(rect, strip, pos2(700.0, two_thirds_down)),
             Some(DropSide::Bottom)
         );
+    }
+
+    /// The band down the outer edge of the workspace is deeper than a tab strip is tall, so
+    /// every strip along the top of the workspace sits inside the top band. Without the strip
+    /// winning, a tab dropped on one of those headings could never join its tabs — it always
+    /// became a row above everything, which is why reordering only worked from the middle of
+    /// a frame.
+    #[test]
+    fn a_tab_strip_beats_the_band_down_the_outer_edge() {
+        let mut frames = Frames::new();
+        let strip_height = frames.style().tab_strip_height();
+        assert!(
+            strip_height < WORKSPACE_EDGE,
+            "this is only worth guarding while a strip fits inside the band: {strip_height} \
+             against {WORKSPACE_EDGE}"
+        );
+
+        // Two frames side by side, so the workspace edge is in play at all.
+        let left = Rect::from_min_size(pos2(0.0, 0.0), vec2(500.0, 600.0));
+        let right = Rect::from_min_size(pos2(500.0, 0.0), vec2(500.0, 600.0));
+        frames.frame_rects = vec![(FrameId(1), left), (FrameId(2), right)];
+
+        // Well inside the left frame's heading, and inside the top band with it.
+        let on_the_heading = pos2(250.0, strip_height / 2.0);
+        assert!(frames.over_a_tab_strip(on_the_heading));
+
+        // A point in the body at the same depth as the band would still be an edge drop, so
+        // the strip is doing the work here rather than the band having gone away.
+        let below_the_headings = pos2(250.0, strip_height + 4.0);
+        assert!(!frames.over_a_tab_strip(below_the_headings));
+    }
+
+    /// The tabs a dragged one is being put between move aside as it goes, so the drop changes
+    /// nothing that was not already on screen. This is the order a strip draws while a drag is
+    /// in flight, which is what those tabs slide towards.
+    #[test]
+    fn a_strip_draws_a_dragged_tab_where_it_is_being_held() {
+        let mut frames = Frames::new();
+        let here = FrameId(1);
+        let (a, b, c) = (PaneId(1), PaneId(2), PaneId(3));
+
+        // Nothing in flight: the strip is the strip.
+        assert_eq!(frames.tabs_in_drawn_order(here, &[a, b, c]), [a, b, c]);
+
+        // Picked up, but not yet over anyone's tabs — it stays where it came from, because
+        // taking it out for that stretch reads as a flicker.
+        frames.dragging = Some(a);
+        assert_eq!(frames.tabs_in_drawn_order(here, &[a, b, c]), [a, b, c]);
+
+        // Carried past the middle of both of the others.
+        frames.tab_landing = Some((here, 2));
+        assert_eq!(frames.tabs_in_drawn_order(here, &[a, b, c]), [b, c, a]);
+
+        // Held over another frame's strip: this one closes up behind it, and that one opens.
+        let there = FrameId(2);
+        frames.tab_landing = Some((there, 0));
+        assert_eq!(frames.tabs_in_drawn_order(here, &[a, b, c]), [b, c]);
+        assert_eq!(frames.tabs_in_drawn_order(there, &[]), [a]);
+    }
+
+    /// Where a dragged tab lands is worked out middle against middle, against the tabs it
+    /// would be put among with the dragged one taken out of the reckoning — the same rule the
+    /// moontasks board uses, and what stops the answer bouncing as the pointer crosses a tab.
+    #[test]
+    fn a_landing_is_counted_from_the_tabs_it_would_be_put_among() {
+        let mut frames = Frames::new();
+        let here = FrameId(1);
+        let (dragged, b, c) = (PaneId(1), PaneId(2), PaneId(3));
+        let tab = |x: f32| Rect::from_min_size(pos2(x, 0.0), vec2(100.0, 18.0));
+
+        frames.dragging = Some(dragged);
+        frames.frame_rects = vec![(here, Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0)))];
+        frames.tab_rects = vec![
+            (here, dragged, tab(0.0)),
+            (here, b, tab(110.0)),
+            (here, c, tab(220.0)),
+        ];
+
+        let strip_y = frames.style().tab_strip_height() / 2.0;
+        let landing = |x: f32| {
+            frames
+                .landing_for(&Layout::<()>::new(), dragged, pos2(x, strip_y))
+                .map(|(_, index)| index)
+        };
+
+        // Left of everything, then past each middle in turn. The dragged tab's own slot is
+        // never counted, so the answer never jumps by two.
+        assert_eq!(landing(5.0), Some(0));
+        assert_eq!(landing(150.0), Some(0));
+        assert_eq!(landing(200.0), Some(1));
+        assert_eq!(landing(400.0), Some(2));
     }
 
     #[test]

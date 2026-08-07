@@ -146,6 +146,79 @@ fn dragging_a_tab_to_a_frames_edge_splits_the_frame() {
     assert!(state.layout.is_coherent());
 }
 
+/// Dropping a tab on another frame's heading reorders it into that frame.
+///
+/// The band down the outer edge of the workspace is deeper than a heading is tall, so every
+/// heading along the top of the workspace sits inside the top band. While the band won, this
+/// drop turned the tab into a row above everything instead — which is why reordering only
+/// worked from the middle of a frame.
+#[test]
+fn dropping_a_tab_on_another_frames_heading_joins_that_frames_tabs() {
+    let (workspace, mut harness, panes) = workspace(&["review", "shell"]);
+    harness.run();
+
+    // Split first, so there are two frames and the outer edge is in play at all.
+    let first = workspace.lock().unwrap().layout.active_frame();
+    let frame_rect = workspace
+        .lock()
+        .unwrap()
+        .frames
+        .frame_rect(first)
+        .expect("expected the frame to have been drawn");
+    let from = tab_center(&workspace, panes[1]);
+    let to = egui::pos2(frame_rect.max.x - 12.0, frame_rect.center().y);
+    press(&mut harness, from, true);
+    for at in [from + egui::vec2(30.0, 20.0), to] {
+        harness.input_mut().events.push(egui::Event::PointerMoved(at));
+        harness.step();
+    }
+    press(&mut harness, to, false);
+    harness.run();
+    assert_eq!(workspace.lock().unwrap().layout.frame_count(), 2);
+
+    // Now carry the right-hand pane's tab back onto the left frame's heading, which is inside
+    // the workspace's top band.
+    let left = workspace
+        .lock()
+        .unwrap()
+        .layout
+        .frame_of(panes[0])
+        .expect("expected the first pane to be in a frame");
+    let left_rect = workspace
+        .lock()
+        .unwrap()
+        .frames
+        .frame_rect(left)
+        .expect("expected the left frame to have been drawn");
+    let heading = egui::pos2(
+        left_rect.center().x,
+        left_rect.min.y + workspace.lock().unwrap().frames.style().tab_strip_height() / 2.0,
+    );
+
+    let from = tab_center(&workspace, panes[1]);
+    press(&mut harness, from, true);
+    for at in [from + egui::vec2(-30.0, 6.0), heading] {
+        harness.input_mut().events.push(egui::Event::PointerMoved(at));
+        harness.step();
+    }
+    press(&mut harness, heading, false);
+    harness.run();
+
+    let state = workspace.lock().unwrap();
+    assert_eq!(
+        state.layout.frame_count(),
+        1,
+        "the tab joined the other frame rather than becoming a row of its own"
+    );
+    assert_eq!(
+        state.layout.frame_of(panes[1]),
+        Some(left),
+        "and it landed in the frame whose heading it was dropped on"
+    );
+    assert_eq!(state.layout.pane_count(), 2, "nothing was lost doing it");
+    assert!(state.layout.is_coherent());
+}
+
 /// A drag released outside every frame cancels, rather than leaving the tab on the pointer.
 #[test]
 fn a_tab_dropped_outside_the_workspace_stays_where_it_was() {
