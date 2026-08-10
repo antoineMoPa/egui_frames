@@ -563,6 +563,14 @@ impl Frames {
             };
             let panes = self.tabs_in_drawn_order(frame, open.panes());
             let active = open.active_pane();
+            let tabs: Vec<(PaneId, Tab)> = panes
+                .into_iter()
+                .filter_map(|pane| {
+                    layout
+                        .pane(pane)
+                        .map(|payload| (pane, view.tab(pane, payload)))
+                })
+                .collect();
 
             // Right to left first: the application's own controls take the outer edge and the
             // new-tab button sits inside them, so both stay on screen however many tabs there
@@ -574,6 +582,7 @@ impl Frames {
                 }
 
                 ui.with_layout(UiLayout::left_to_right(Align::Center), |ui| {
+                    let titles = self.title_widths(ui, &tabs);
                     // More tabs than the strip has room for scroll sideways under the
                     // trackpad rather than vanish off the end. No bar is drawn: a strip has
                     // no room for one, and the wheel is how the strip says it scrolls.
@@ -588,20 +597,17 @@ impl Frames {
                                 // has been moved, resized or scrolled is not read as every
                                 // tab in it having moved.
                                 let origin = ui.min_rect().left();
-                                for pane in panes {
-                                    let Some(payload) = layout.pane(pane) else {
-                                        continue;
-                                    };
-                                    let tab = view.tab(pane, payload);
+                                for ((pane, tab), title_width) in tabs.iter().zip(titles) {
                                     self.draw_tab(
                                         ui,
                                         layout,
                                         events,
                                         frame,
-                                        pane,
-                                        &tab,
-                                        active == Some(pane),
+                                        *pane,
+                                        tab,
+                                        active == Some(*pane),
                                         origin,
+                                        title_width,
                                     );
                                 }
                             });
@@ -609,6 +615,42 @@ impl Frames {
                 });
             });
         });
+    }
+
+    /// How wide each tab's one-line title gets this time round.
+    ///
+    /// Every title is guaranteed [`FramesStyle::max_tab_width`]; a strip with room to spare
+    /// shares what is left, so a title that was cut short grows back the moment tabs close or
+    /// the frame widens. Titles that want less than an even share keep their own width, and
+    /// what they leave unused widens the longer ones.
+    fn title_widths(&self, ui: &Ui, tabs: &[(PaneId, Tab)]) -> Vec<f32> {
+        let style = &self.style;
+        let wanted: Vec<f32> = tabs
+            .iter()
+            .map(|(_, tab)| {
+                cut_to_fit(ui, &tab.title, style.font.clone(), style.text, f32::INFINITY)
+                    .size()
+                    .x
+            })
+            .collect();
+        // What the strip spends beside the titles: each tab's insets, marker and close mark,
+        // and the gaps between tabs. What is left after that is the titles' to share.
+        let chrome: f32 = tabs
+            .iter()
+            .map(|(_, tab)| {
+                let marker = if tab.marker { TAB_MARKER_SPACE } else { 0.0 };
+                let close = if tab.closable {
+                    TAB_CLOSE_GAP + TAB_CLOSE_SIZE + TAB_CLOSE_INSET
+                } else {
+                    TAB_TEXT_INSET
+                };
+                TAB_TEXT_INSET + marker + close
+            })
+            .sum();
+        let gaps = style.tab_gap * tabs.len().saturating_sub(1) as f32;
+        let room = ui.available_width() - chrome - gaps;
+        let cap = shared_title_cap(&wanted, room, style.max_tab_width);
+        wanted.into_iter().map(|want| want.min(cap)).collect()
     }
 
     /// Draw a tab at the place the strip gives it, walking there from wherever it was drawn
@@ -637,6 +679,7 @@ impl Frames {
         tab: &Tab,
         selected: bool,
         origin: f32,
+        title_width: f32,
     ) {
         let id = self.salt.with(("tab-slide", pane));
         let belongs_at = ui.cursor().left() - origin;
@@ -648,7 +691,7 @@ impl Frames {
         let offset = drawn_at - belongs_at;
 
         if offset.abs() < 0.5 {
-            self.draw_tab_body(ui, layout, events, frame, pane, tab, selected);
+            self.draw_tab_body(ui, layout, events, frame, pane, tab, selected, title_width);
             return;
         }
 
@@ -659,7 +702,7 @@ impl Frames {
         let clip = ui.clip_rect();
         ui.scope_builder(UiBuilder::new().layer_id(layer_id), |ui| {
             ui.set_clip_rect(clip.translate(vec2(-offset, 0.0)));
-            self.draw_tab_body(ui, layout, events, frame, pane, tab, selected);
+            self.draw_tab_body(ui, layout, events, frame, pane, tab, selected, title_width);
         });
         ui.ctx().transform_layer_shapes(
             layer_id,
@@ -680,8 +723,20 @@ impl Frames {
         pane: PaneId,
         tab: &Tab,
         selected: bool,
+        title_width: f32,
     ) {
         let style = &self.style;
+        // The title walks to the width the strip granted it rather than jumping there, the
+        // same way a tab walks to its place. At full width the cut is lifted altogether, so
+        // the whole title is never traded for an ellipsis by a rounding error.
+        let granted = ui.ctx().animate_value_with_time(
+            self.salt.with(("tab-title-width", pane)),
+            title_width,
+            TAB_SLIDE,
+        );
+        let full = cut_to_fit(ui, &tab.title, style.font.clone(), style.text, f32::INFINITY)
+            .size()
+            .x;
         let galley = cut_to_fit(
             ui,
             &tab.title,
@@ -691,7 +746,7 @@ impl Frames {
             } else {
                 style.inactive_text
             },
-            style.max_tab_width,
+            if granted >= full { f32::INFINITY } else { granted },
         );
         let marker_space = if tab.marker { TAB_MARKER_SPACE } else { 0.0 };
         let close_space = if tab.closable {
@@ -1159,6 +1214,27 @@ fn draw_close_mark(painter: &egui::Painter, center: Pos2, ink: Color32) {
     );
 }
 
+/// The widest any one title in a strip may be, given what each title wants and the room they
+/// all share.
+///
+/// Filled up from the shortest title: one that wants less than an even share of what is left
+/// keeps what it wants, and the width it leaves unused is split over the longer ones. When
+/// everything fits there is no cap at all. The cap never drops below `floor` — a strip too
+/// crowded to give every title that much scrolls instead.
+fn shared_title_cap(wanted: &[f32], room: f32, floor: f32) -> f32 {
+    let mut sorted = wanted.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    let mut left = room;
+    for (index, want) in sorted.iter().enumerate() {
+        let share = left / (sorted.len() - index) as f32;
+        if *want > share {
+            return share.max(floor);
+        }
+        left -= want;
+    }
+    f32::INFINITY
+}
+
 /// A title laid out on one line, cut short with an ellipsis rather than wrapped.
 fn cut_to_fit(
     ui: &Ui,
@@ -1187,6 +1263,29 @@ fn cut_to_fit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A strip with room for everything cuts nothing, however unevenly long the titles are.
+    #[test]
+    fn titles_that_fit_are_not_capped() {
+        assert_eq!(
+            shared_title_cap(&[40.0, 300.0], 400.0, 170.0),
+            f32::INFINITY
+        );
+    }
+
+    /// Spare room goes to the titles that need it: a short title keeps its own width, and the
+    /// long ones split what it leaves evenly between them.
+    #[test]
+    fn spare_room_is_shared_up_from_the_shortest_title() {
+        assert_eq!(shared_title_cap(&[40.0, 500.0, 500.0], 400.0, 170.0), 180.0);
+    }
+
+    /// A strip too crowded to grant even the guaranteed width falls back to it, and the
+    /// overflow is the scroll area's to deal with.
+    #[test]
+    fn a_crowded_strip_keeps_the_guaranteed_width() {
+        assert_eq!(shared_title_cap(&[500.0, 500.0, 500.0], 300.0, 170.0), 170.0);
+    }
 
     fn frame_of(width: f32, height: f32) -> (Frames, Rect, Rect) {
         let frames = Frames::new();

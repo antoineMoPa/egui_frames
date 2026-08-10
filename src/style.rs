@@ -30,7 +30,9 @@ pub struct FramesStyle {
     pub close_hover: Color32,
     /// The tab titles, and anything else written on the chrome.
     pub font: FontId,
-    /// How wide a tab's title may get before it is cut short with an ellipsis.
+    /// How wide a tab's title is guaranteed before it is cut short with an ellipsis. A strip
+    /// with room to spare lets its titles grow past this until nothing is cut; a strip too
+    /// crowded to give every title this much scrolls instead.
     pub max_tab_width: f32,
     /// The height of a tab, which sets the height of the strip with it.
     pub tab_height: f32,

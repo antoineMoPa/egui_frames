@@ -295,3 +295,41 @@ fn the_new_tab_button_asks_the_application_for_a_tab() {
         vec![FramesEvent::NewTabRequested(frame)]
     );
 }
+
+/// A title cut short while the strip was crowded grows back once the other tabs close and
+/// their room re-becomes available.
+#[test]
+fn a_cut_title_grows_back_when_tabs_close() {
+    let long = "a ridiculously long shell title that is cut short while the strip is crowded";
+    let (workspace, mut harness, panes) = workspace(&[long; 6]);
+    harness.run();
+
+    let width_of = |workspace: &Arc<Mutex<Workspace>>, pane| {
+        workspace
+            .lock()
+            .expect("expected the workspace")
+            .frames
+            .tab_rect(pane)
+            .expect("expected the tab to have been drawn")
+            .width()
+    };
+    let crowded = width_of(&workspace, panes[0]);
+
+    for pane in &panes[1..] {
+        workspace
+            .lock()
+            .expect("expected the workspace")
+            .layout
+            .close_pane(*pane);
+    }
+    // Long enough for the title to finish walking out to the width it was granted.
+    for _ in 0..30 {
+        harness.step();
+    }
+
+    let alone = width_of(&workspace, panes[0]);
+    assert!(
+        alone > crowded + 50.0,
+        "a lone tab should have grown into the freed strip: {crowded} then {alone}"
+    );
+}
