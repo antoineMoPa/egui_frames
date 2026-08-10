@@ -25,6 +25,9 @@ pub struct Tab {
     /// What the tab says when the pointer rests on it. The title is a good default when it
     /// might have been cut short.
     pub hover: Option<String>,
+    /// A short, dim label at the right of the title — the keyboard shortcut that raises this
+    /// tab, a count. Never cut short: a label worth carrying is worth carrying whole.
+    pub indicator: Option<String>,
     /// Whether the tab offers a close mark, and answers a middle click.
     pub closable: bool,
 }
@@ -36,6 +39,7 @@ impl Tab {
             title: title.into(),
             marker: false,
             hover: None,
+            indicator: None,
             closable: true,
         }
     }
@@ -51,6 +55,13 @@ impl Tab {
     #[must_use]
     pub fn with_hover(mut self, hover: impl Into<String>) -> Self {
         self.hover = Some(hover.into());
+        self
+    }
+
+    /// Put a dim label at the right of the title.
+    #[must_use]
+    pub fn with_indicator(mut self, indicator: impl Into<String>) -> Self {
+        self.indicator = Some(indicator.into());
         self
     }
 
@@ -123,6 +134,8 @@ const TAB_CLOSE_INSET: f32 = 4.0;
 const TAB_TEXT_INSET: f32 = 8.0;
 /// Room before the title for the dot a marked tab carries.
 const TAB_MARKER_SPACE: f32 = 11.0;
+/// Space between the end of a tab's title and the indicator it carries.
+const TAB_INDICATOR_GAP: f32 = 6.0;
 
 /// The widget: draws an arrangement, and turns pointer gestures into the next one.
 ///
@@ -633,8 +646,9 @@ impl Frames {
                     .x
             })
             .collect();
-        // What the strip spends beside the titles: each tab's insets, marker and close mark,
-        // and the gaps between tabs. What is left after that is the titles' to share.
+        // What the strip spends beside the titles: each tab's insets, marker, indicator and
+        // close mark, and the gaps between tabs. What is left after that is the titles' to
+        // share.
         let chrome: f32 = tabs
             .iter()
             .map(|(_, tab)| {
@@ -644,13 +658,33 @@ impl Frames {
                 } else {
                     TAB_TEXT_INSET
                 };
-                TAB_TEXT_INSET + marker + close
+                TAB_TEXT_INSET + marker + self.indicator_width(ui, tab) + close
             })
             .sum();
         let gaps = style.tab_gap * tabs.len().saturating_sub(1) as f32;
         let room = ui.available_width() - chrome - gaps;
         let cap = shared_title_cap(&wanted, room, style.max_tab_width);
         wanted.into_iter().map(|want| want.min(cap)).collect()
+    }
+
+    /// What a tab's indicator takes beside the title: the gap before it and its own width.
+    /// Nothing, for a tab carrying none.
+    fn indicator_width(&self, ui: &Ui, tab: &Tab) -> f32 {
+        match &tab.indicator {
+            Some(indicator) => {
+                TAB_INDICATOR_GAP
+                    + cut_to_fit(
+                        ui,
+                        indicator,
+                        self.style.font.clone(),
+                        self.style.inactive_text,
+                        f32::INFINITY,
+                    )
+                    .size()
+                    .x
+            }
+            None => 0.0,
+        }
     }
 
     /// Draw a tab at the place the strip gives it, walking there from wherever it was drawn
@@ -754,7 +788,21 @@ impl Frames {
         } else {
             TAB_TEXT_INSET
         };
-        let width = galley.size().x + marker_space + TAB_TEXT_INSET + close_space;
+        // The indicator is dim whether or not the tab is selected: it is a signpost beside
+        // the title, not part of it.
+        let indicator = tab.indicator.as_ref().map(|indicator| {
+            cut_to_fit(
+                ui,
+                indicator,
+                style.font.clone(),
+                style.inactive_text,
+                f32::INFINITY,
+            )
+        });
+        let indicator_space = indicator
+            .as_ref()
+            .map_or(0.0, |galley| TAB_INDICATOR_GAP + galley.size().x);
+        let width = galley.size().x + marker_space + indicator_space + TAB_TEXT_INSET + close_space;
         let (rect, response) =
             ui.allocate_exact_size(vec2(width, style.tab_height), Sense::click_and_drag());
         let mut response = response.on_hover_cursor(CursorIcon::PointingHand);
@@ -819,6 +867,19 @@ impl Frames {
                 galley,
                 style.text,
             );
+            // Anchored to the right edge rather than to the title's end, so it holds still
+            // while the title walks to a new width.
+            if let Some(indicator) = indicator {
+                let size = indicator.size();
+                painter.galley(
+                    pos2(
+                        rect.max.x - close_space - size.x,
+                        (rect.center().y - size.y / 2.0).round(),
+                    ),
+                    indicator,
+                    style.inactive_text,
+                );
+            }
 
             let close_rect = Rect::from_center_size(
                 pos2(
