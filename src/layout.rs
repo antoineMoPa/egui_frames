@@ -461,9 +461,14 @@ impl<P> Layout<P> {
         let only_frame_left = self.frames.len() == 1;
 
         let frame = self.frames.get_mut(&frame_id)?;
+        let closed_at = frame.panes.iter().position(|open| *open == pane);
         frame.panes.retain(|open| *open != pane);
         if frame.active_pane == Some(pane) {
-            frame.active_pane = frame.panes.last().copied();
+            // Focus lands on the tab that slid into the closed one's place, and falls back to
+            // the tab before it when the last one in the strip is what closed.
+            frame.active_pane = closed_at
+                .and_then(|at| frame.panes.get(at).copied())
+                .or_else(|| frame.panes.last().copied());
         }
         let frame_is_empty = frame.panes.is_empty();
         let closed = self.panes.remove(&pane);
@@ -786,6 +791,32 @@ mod tests {
 
         assert_ne!(first, second);
         assert_eq!(layout.pane_count(), 3);
+    }
+
+    #[test]
+    fn closing_the_pane_in_front_focuses_the_next_tab_of_the_strip() {
+        let mut layout = layout();
+        let frame = layout.active_frame();
+        let middle = layout.add_pane(frame, "shell", None);
+        let last = layout.add_pane(frame, "file", None);
+        layout.focus_pane(middle);
+
+        layout.close_pane(middle);
+
+        assert_eq!(layout.active_pane().map(|(pane, _)| pane), Some(last));
+    }
+
+    #[test]
+    fn closing_the_last_tab_of_the_strip_focuses_the_one_before_it() {
+        let mut layout = layout();
+        let frame = layout.active_frame();
+        let review = pane_of(&layout, "review");
+        let last = layout.add_pane(frame, "shell", None);
+        layout.focus_pane(last);
+
+        layout.close_pane(last);
+
+        assert_eq!(layout.active_pane().map(|(pane, _)| pane), Some(review));
     }
 
     #[test]
