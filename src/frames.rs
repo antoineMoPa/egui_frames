@@ -179,6 +179,12 @@ pub struct Frames {
     /// where it came from — and so what makes the tabs around it move aside before the drop
     /// rather than after it.
     tab_landing: Option<(FrameId, usize)>,
+    /// The close mark the pointer went down on, and where that mark was while it did. A press
+    /// can move the strip out from under itself — the frame it lands in becomes the active
+    /// one, and an application that marks the active frame's tabs widens every one of them —
+    /// so the release is measured against the mark that was pressed rather than against
+    /// whatever has slid into its place.
+    pressed_close: Option<(PaneId, Rect)>,
     /// Where each frame, tab and pane body was drawn last time round.
     frame_rects: Vec<(FrameId, Rect)>,
     tab_rects: Vec<(FrameId, PaneId, Rect)>,
@@ -204,6 +210,7 @@ impl Frames {
             dragging: None,
             grab_offset: Vec2::ZERO,
             tab_landing: None,
+            pressed_close: None,
             frame_rects: Vec::new(),
             tab_rects: Vec::new(),
             pane_rects: Vec::new(),
@@ -334,6 +341,11 @@ impl Frames {
             .input(|input| (input.pointer.any_released(), input.pointer.latest_pos()));
         if self.dragging.is_some() && released {
             self.finish_drag(layout, at);
+        }
+
+        // A close mark is only pressed for as long as the button is down on it.
+        if released {
+            self.pressed_close = None;
         }
 
         events
@@ -803,8 +815,12 @@ impl Frames {
             .as_ref()
             .map_or(0.0, |galley| TAB_INDICATOR_GAP + galley.size().x);
         let width = galley.size().x + marker_space + indicator_space + TAB_TEXT_INSET + close_space;
-        let (rect, response) =
-            ui.allocate_exact_size(vec2(width, style.tab_height), Sense::click_and_drag());
+        // The tab answers to an id of its own rather than to one counted out of the order it
+        // was drawn in: a tab on its way to a new place is drawn from a layer of its own, and
+        // a counted id would change the moment it set off — which egui reads as the widget
+        // being pressed having gone, and drops the click the user is in the middle of making.
+        let (_, rect) = ui.allocate_space(vec2(width, style.tab_height));
+        let response = ui.interact(rect, self.salt.with(("tab", pane)), Sense::click_and_drag());
         let mut response = response.on_hover_cursor(CursorIcon::PointingHand);
         if let Some(hover) = &tab.hover {
             response = response.on_hover_text(hover);
@@ -890,6 +906,9 @@ impl Frames {
             );
             let hovering_close =
                 tab.closable && !dragging_this && pointer.is_some_and(|at| close_rect.contains(at));
+            if hovering_close && ui.input(|input| input.pointer.primary_pressed()) {
+                self.pressed_close = Some((pane, close_rect));
+            }
             if tab.closable && !dragging_this && (response.hovered() || selected) {
                 // Drawn rather than typeset: an ellipsis of a font's close glyphs is a heavy
                 // emoji ✖, and a tab wants the thin ✕ a browser draws.
@@ -903,7 +922,13 @@ impl Frames {
                     },
                 );
             }
-            close_clicked = response.clicked() && hovering_close;
+            // The mark the press went down on, still under the pointer where it was pressed:
+            // a tab that has moved since takes its close with it, and the click lands on it
+            // all the same.
+            close_clicked = response.clicked()
+                && self.pressed_close.is_some_and(|(pressed, at)| {
+                    pressed == pane && pointer.is_some_and(|now| at.contains(now))
+                });
         }
 
         if close_clicked {

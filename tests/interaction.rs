@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use egui_frames::{Frames, FramesEvent, Layout, PaneId, PaneView, Tab};
+use egui_frames::{DropSide, Frames, FramesEvent, Layout, PaneId, PaneView, Tab};
 use egui_kittest::Harness;
 
 /// A workspace of named panes, and whatever it reported while it was drawn.
@@ -10,11 +10,27 @@ struct Workspace {
     frames: Frames,
     layout: Layout<String>,
     events: Vec<FramesEvent>,
+    /// Whether the tabs of the active frame wear the chord that raises them, the way the
+    /// application vendoring this crate stamps cmd+1..cmd+9 on the frame the keyboard is in.
+    /// A frame that becomes active grows its tabs by that label, which is what makes the
+    /// strip move under a pointer that has only just gone down on it.
+    shortcuts: bool,
+    /// The tabs wearing a chord this time round, worked out before the arrangement is drawn —
+    /// the layout is lent to `show` for the length of the draw, so a tab cannot look it up.
+    shortcut_panes: Vec<PaneId>,
 }
 
 impl PaneView<String> for Workspace {
-    fn tab(&mut self, _pane: PaneId, name: &String) -> Tab {
-        Tab::new(name)
+    fn tab(&mut self, pane: PaneId, name: &String) -> Tab {
+        let tab = Tab::new(name);
+        match self
+            .shortcut_panes
+            .iter()
+            .position(|stamped| *stamped == pane)
+        {
+            Some(index) => tab.with_indicator(format!("cmd+{}", index + 1)),
+            None => tab,
+        }
     }
 
     fn pane_ui(&mut self, ui: &mut egui::Ui, _pane: PaneId, name: &String) {
@@ -24,6 +40,14 @@ impl PaneView<String> for Workspace {
 
 impl Workspace {
     fn draw(&mut self, ui: &mut egui::Ui) {
+        if self.shortcuts {
+            let active = self.layout.active_frame();
+            self.shortcut_panes = self
+                .layout
+                .frame(active)
+                .map(|open| open.panes().to_vec())
+                .unwrap_or_default();
+        }
         let mut frames = std::mem::take(&mut self.frames);
         let mut layout = std::mem::take(&mut self.layout);
         self.events = frames.show(ui, &mut layout, self);
@@ -32,30 +56,51 @@ impl Workspace {
     }
 }
 
-/// Two panes in one frame, drawn in a window-sized harness.
-fn workspace(panes: &[&str]) -> (Arc<Mutex<Workspace>>, Harness<'static>, Vec<PaneId>) {
-    let mut layout = Layout::new();
-    let frame = layout.active_frame();
-    let ids = panes
-        .iter()
-        .map(|name| layout.add_pane(frame, (*name).to_string(), None))
-        .collect();
-
-    let workspace = Arc::new(Mutex::new(Workspace {
-        frames: Frames::new(),
-        layout,
-        events: Vec::new(),
-    }));
-
-    let drawn = Arc::clone(&workspace);
-    let harness = Harness::builder()
+/// A workspace of the given arrangement, drawn in a window-sized harness. `step_dt` is how
+/// much time one drawn frame takes, which matters to any gesture held across several of them:
+/// egui only calls a press a click if the button comes back up inside its click window.
+fn harness_over(workspace: &Arc<Mutex<Workspace>>, step_dt: f32) -> Harness<'static> {
+    let drawn = Arc::clone(workspace);
+    Harness::builder()
         .with_size(egui::vec2(900.0, 600.0))
+        .with_step_dt(step_dt)
         .build_ui(move |ui| {
             drawn.lock().expect("expected the workspace").draw(ui);
-        });
+        })
+}
 
+/// What a workspace is before anything is arranged in it.
+fn empty_workspace() -> Workspace {
+    Workspace {
+        frames: Frames::new(),
+        layout: Layout::new(),
+        events: Vec::new(),
+        shortcuts: false,
+        shortcut_panes: Vec::new(),
+    }
+}
+
+/// The panes named, side by side as tabs of one frame.
+fn workspace(panes: &[&str]) -> (Arc<Mutex<Workspace>>, Harness<'static>, Vec<PaneId>) {
+    let mut state = empty_workspace();
+    let frame = state.layout.active_frame();
+    let ids = panes
+        .iter()
+        .map(|name| state.layout.add_pane(frame, (*name).to_string(), None))
+        .collect();
+
+    let workspace = Arc::new(Mutex::new(state));
+    let harness = harness_over(&workspace, DEFAULT_STEP_DT);
     (workspace, harness, ids)
 }
+
+/// A drawn frame's worth of time, as long as kittest's own default: the tests that watch a
+/// tab walk to a new place want it long enough that an animation is over in a step or two.
+const DEFAULT_STEP_DT: f32 = 1.0 / 4.0;
+
+/// A drawn frame's worth of time for the tests that hold a button down across several of
+/// them, where a real pointer would be down for a fraction of a second all told.
+const CLICK_STEP_DT: f32 = 1.0 / 60.0;
 
 fn tab_center(workspace: &Arc<Mutex<Workspace>>, pane: PaneId) -> egui::Pos2 {
     workspace
@@ -331,5 +376,60 @@ fn a_cut_title_grows_back_when_tabs_close() {
     assert!(
         alone > crowded + 50.0,
         "a lone tab should have grown into the freed strip: {crowded} then {alone}"
+    );
+}
+
+/// A close mark in a frame the keyboard is not in closes its tab on the first click.
+///
+/// The press that lands on the mark is also what makes that frame the active one, and an
+/// application that marks the active frame's tabs — with the chord that raises each of them,
+/// as this one does — widens every tab in the strip. The mark walks out from under the
+/// pointer while the button is still down, and the click belongs to the mark it went down on
+/// rather than to whatever has slid into its place.
+#[test]
+fn a_close_mark_in_an_inactive_frame_closes_on_the_first_click() {
+    let mut state = empty_workspace();
+    state.shortcuts = true;
+    let here = state.layout.active_frame();
+    state.layout.add_pane(here, "review".to_string(), None);
+    let beside = state
+        .layout
+        .add_pane_beside(here, DropSide::Right, "shell".to_string());
+    let there = state.layout.frame_of(beside).expect("expected the frame");
+    let aside = state.layout.add_pane(there, "notes".to_string(), None);
+    state.layout.set_active_frame(here);
+
+    let workspace = Arc::new(Mutex::new(state));
+    let mut harness = harness_over(&workspace, CLICK_STEP_DT);
+    harness.run();
+
+    // The mark at the right-hand end of the tab, where the user sees it before pressing: the
+    // pointer holds that spot for the whole click.
+    let at = {
+        let state = workspace.lock().expect("expected the workspace");
+        assert_ne!(
+            state.layout.active_frame(),
+            there,
+            "the tab being closed is in the frame the keyboard is not in"
+        );
+        let tab = state
+            .frames
+            .tab_rect(aside)
+            .expect("expected the tab to have been drawn");
+        egui::pos2(tab.max.x - 10.0, tab.center().y)
+    };
+    press(&mut harness, at, true);
+    // The tabs of the frame the press landed in take their chords and grow by them, which is
+    // over in a few frames — well inside the time a button stays down for a click.
+    for _ in 0..10 {
+        harness.step();
+    }
+    press(&mut harness, at, false);
+
+    let state = workspace.lock().expect("expected the workspace");
+    assert_eq!(
+        state.events,
+        vec![FramesEvent::PaneCloseRequested(aside)],
+        "the tab whose close mark was pressed is the one asked to close"
     );
 }
