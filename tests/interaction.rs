@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui_frames::{DropSide, Frames, FramesEvent, Layout, PaneId, PaneView, Tab};
-use egui_kittest::Harness;
+use egui_kittest::{Harness, kittest::Queryable};
 
 /// A workspace of named panes, and whatever it reported while it was drawn.
 struct Workspace {
@@ -18,11 +18,14 @@ struct Workspace {
     /// The tabs wearing a chord this time round, worked out before the arrangement is drawn —
     /// the layout is lent to `show` for the length of the draw, so a tab cannot look it up.
     shortcut_panes: Vec<PaneId>,
+    /// The tab whose title is open for retyping, the way an application answers a double
+    /// click on a tab it lets be renamed.
+    editing: Option<PaneId>,
 }
 
 impl PaneView<String> for Workspace {
     fn tab(&mut self, pane: PaneId, name: &String) -> Tab {
-        let tab = Tab::new(name);
+        let tab = Tab::new(name).editing(self.editing == Some(pane));
         match self
             .shortcut_panes
             .iter()
@@ -35,6 +38,10 @@ impl PaneView<String> for Workspace {
 
     fn pane_ui(&mut self, ui: &mut egui::Ui, _pane: PaneId, name: &String) {
         ui.label(name.as_str());
+    }
+
+    fn tab_editor_ui(&mut self, ui: &mut egui::Ui, _pane: PaneId, name: &String) {
+        ui.label(format!("editing {name}"));
     }
 }
 
@@ -77,6 +84,7 @@ fn empty_workspace() -> Workspace {
         events: Vec::new(),
         shortcuts: false,
         shortcut_panes: Vec::new(),
+        editing: None,
     }
 }
 
@@ -431,5 +439,65 @@ fn a_close_mark_in_an_inactive_frame_closes_on_the_first_click() {
         state.events,
         vec![FramesEvent::PaneCloseRequested(aside)],
         "the tab whose close mark was pressed is the one asked to close"
+    );
+}
+
+/// A double click on a tab is reported and nothing more: what it asks for — a rename, say —
+/// is the application's to answer.
+#[test]
+fn double_clicking_a_tab_tells_the_application() {
+    // Drawn a frame at a time at a real frame's pace: egui only calls two clicks a double
+    // when the second lands within a fraction of a second of the first.
+    let (workspace, _, panes) = workspace(&["review", "shell"]);
+    let mut harness = harness_over(&workspace, CLICK_STEP_DT);
+    harness.run();
+
+    let at = tab_center(&workspace, panes[1]);
+    press(&mut harness, at, true);
+    press(&mut harness, at, false);
+    press(&mut harness, at, true);
+    press(&mut harness, at, false);
+
+    let state = workspace.lock().unwrap();
+    assert_eq!(
+        state.events,
+        vec![FramesEvent::TabDoubleClicked(panes[1])],
+        "the second click of a double is reported as one"
+    );
+    assert_eq!(
+        state.layout.frame(state.layout.active_frame()).unwrap().active_pane(),
+        Some(panes[1]),
+        "and the first of the two has already brought the pane forward"
+    );
+}
+
+/// A tab that is editing is drawn as the application's editor, in the tab's own place.
+#[test]
+fn an_editing_tab_is_drawn_as_the_applications_editor() {
+    let (workspace, mut harness, panes) = workspace(&["review", "shell"]);
+    harness.run();
+    let before = workspace
+        .lock()
+        .unwrap()
+        .frames
+        .tab_rect(panes[1])
+        .expect("expected the tab to have been drawn");
+
+    workspace.lock().unwrap().editing = Some(panes[1]);
+    harness.run();
+
+    assert!(
+        harness.query_by_label("editing shell").is_some(),
+        "the editor should be drawn in the tab"
+    );
+    let editing = workspace
+        .lock()
+        .unwrap()
+        .frames
+        .tab_rect(panes[1])
+        .expect("expected the editing tab to have been drawn");
+    assert!(
+        editing.min.x == before.min.x && editing.width() > before.width(),
+        "the editor takes the tab's place, widened to hold what is typed: {before:?} -> {editing:?}"
     );
 }

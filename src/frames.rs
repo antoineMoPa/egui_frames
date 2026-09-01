@@ -30,6 +30,11 @@ pub struct Tab {
     pub indicator: Option<String>,
     /// Whether the tab offers a close mark, and answers a middle click.
     pub closable: bool,
+    /// Whether the title is being edited. An editing tab is drawn as whatever
+    /// [`PaneView::tab_editor_ui`] puts in it — a box the title is retyped in — in place of
+    /// its title, close mark and indicator, and answers to no pointer gesture of its own
+    /// while it is: the box has the pointer.
+    pub editing: bool,
 }
 
 impl Tab {
@@ -41,7 +46,16 @@ impl Tab {
             hover: None,
             indicator: None,
             closable: true,
+            editing: false,
         }
+    }
+
+    /// Draw the tab as the application's editor rather than as its title — see
+    /// [`PaneView::tab_editor_ui`].
+    #[must_use]
+    pub fn editing(mut self, editing: bool) -> Self {
+        self.editing = editing;
+        self
     }
 
     /// Put a dot before the title.
@@ -83,6 +97,12 @@ pub trait PaneView<P> {
     /// Draw the pane, in whatever space its frame has left below the tab strip.
     fn pane_ui(&mut self, ui: &mut Ui, id: PaneId, pane: &P);
 
+    /// Draw what an editing tab holds in place of its title — see [`Tab::editing`]. The `ui`
+    /// is the inside of the tab, one line high and [`FramesStyle::max_tab_width`] wide. Called
+    /// for a tab whose [`Self::tab`] said it was editing and for no other; the default draws
+    /// nothing, which is what an application that never edits a tab needs.
+    fn tab_editor_ui(&mut self, _ui: &mut Ui, _id: PaneId, _pane: &P) {}
+
     /// Draw a frame that has nothing in it — the state a workspace is left in when its last
     /// tab is closed. The default draws nothing.
     fn empty_frame_ui(&mut self, _ui: &mut Ui, _frame: FrameId) {}
@@ -108,6 +128,10 @@ pub enum FramesEvent {
     /// The new-tab button on a frame's strip was clicked. What a new tab is, is the
     /// application's business.
     NewTabRequested(FrameId),
+    /// A tab was double-clicked. The first of the two clicks has already brought its pane to
+    /// the front; what the second asks for is the application's business — opening the title
+    /// for renaming, say, by handing back a [`Tab`] that is [`Tab::editing`].
+    TabDoubleClicked(PaneId),
 }
 
 /// How close to the outer edge of the whole arrangement a dropped tab has to land to become a
@@ -626,6 +650,7 @@ impl Frames {
                                     self.draw_tab(
                                         ui,
                                         layout,
+                                        view,
                                         events,
                                         frame,
                                         *pane,
@@ -653,6 +678,11 @@ impl Frames {
         let wanted: Vec<f32> = tabs
             .iter()
             .map(|(_, tab)| {
+                // An editing tab holds a box rather than a title, and the box is as wide as
+                // a title is ever guaranteed: room to retype a name without it scrolling.
+                if tab.editing {
+                    return style.max_tab_width;
+                }
                 cut_to_fit(ui, &tab.title, style.font.clone(), style.text, f32::INFINITY)
                     .size()
                     .x
@@ -664,6 +694,9 @@ impl Frames {
         let chrome: f32 = tabs
             .iter()
             .map(|(_, tab)| {
+                if tab.editing {
+                    return TAB_TEXT_INSET * 2.0;
+                }
                 let marker = if tab.marker { TAB_MARKER_SPACE } else { 0.0 };
                 let close = if tab.closable {
                     TAB_CLOSE_GAP + TAB_CLOSE_SIZE + TAB_CLOSE_INSET
@@ -715,10 +748,11 @@ impl Frames {
         clippy::too_many_arguments,
         reason = "a tab is drawn from its pane, its frame, and what the application named it"
     )]
-    fn draw_tab<P>(
+    fn draw_tab<P, V: PaneView<P>>(
         &mut self,
         ui: &mut Ui,
         layout: &mut Layout<P>,
+        view: &mut V,
         events: &mut Vec<FramesEvent>,
         frame: FrameId,
         pane: PaneId,
@@ -737,7 +771,17 @@ impl Frames {
         let offset = drawn_at - belongs_at;
 
         if offset.abs() < 0.5 {
-            self.draw_tab_body(ui, layout, events, frame, pane, tab, selected, title_width);
+            self.draw_tab_body(
+                ui,
+                layout,
+                view,
+                events,
+                frame,
+                pane,
+                tab,
+                selected,
+                title_width,
+            );
             return;
         }
 
@@ -748,7 +792,17 @@ impl Frames {
         let clip = ui.clip_rect();
         ui.scope_builder(UiBuilder::new().layer_id(layer_id), |ui| {
             ui.set_clip_rect(clip.translate(vec2(-offset, 0.0)));
-            self.draw_tab_body(ui, layout, events, frame, pane, tab, selected, title_width);
+            self.draw_tab_body(
+                ui,
+                layout,
+                view,
+                events,
+                frame,
+                pane,
+                tab,
+                selected,
+                title_width,
+            );
         });
         ui.ctx().transform_layer_shapes(
             layer_id,
@@ -760,10 +814,11 @@ impl Frames {
         clippy::too_many_arguments,
         reason = "a tab is drawn from its pane, its frame, and what the application named it"
     )]
-    fn draw_tab_body<P>(
+    fn draw_tab_body<P, V: PaneView<P>>(
         &mut self,
         ui: &mut Ui,
         layout: &mut Layout<P>,
+        view: &mut V,
         events: &mut Vec<FramesEvent>,
         frame: FrameId,
         pane: PaneId,
@@ -771,6 +826,10 @@ impl Frames {
         selected: bool,
         title_width: f32,
     ) {
+        if tab.editing {
+            self.draw_tab_editor(ui, layout, view, frame, pane, title_width);
+            return;
+        }
         let style = &self.style;
         // The title walks to the width the strip granted it rather than jumping there, the
         // same way a tab walks to its place. At full width the cut is lifted altogether, so
@@ -938,6 +997,9 @@ impl Frames {
         if response.clicked() {
             layout.focus_pane(pane);
         }
+        if response.double_clicked() {
+            events.push(FramesEvent::TabDoubleClicked(pane));
+        }
         // Middle-click closes a tab, as it does in a browser.
         if tab.closable && response.middle_clicked() {
             events.push(FramesEvent::PaneCloseRequested(pane));
@@ -952,6 +1014,45 @@ impl Frames {
         if response.dragged() {
             ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
         }
+    }
+
+    /// An editing tab: the fill of the tab in front, with the application's editor where the
+    /// title was. It answers to no click or drag — the box in it has the pointer — and wears
+    /// neither close mark nor indicator, which would only crowd what is being typed.
+    fn draw_tab_editor<P, V: PaneView<P>>(
+        &mut self,
+        ui: &mut Ui,
+        layout: &Layout<P>,
+        view: &mut V,
+        frame: FrameId,
+        pane: PaneId,
+        title_width: f32,
+    ) {
+        let style = &self.style;
+        let (_, rect) = ui.allocate_space(vec2(
+            title_width + TAB_TEXT_INSET * 2.0,
+            style.tab_height,
+        ));
+        self.tab_rects.push((frame, pane, rect));
+        if !ui.is_rect_visible(rect) {
+            return;
+        }
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(4), style.active_tab_fill);
+
+        let Some(payload) = layout.pane(pane) else {
+            return;
+        };
+        let inside = Rect::from_min_max(
+            pos2(rect.min.x + TAB_TEXT_INSET, rect.min.y),
+            pos2(rect.max.x - TAB_TEXT_INSET, rect.max.y),
+        );
+        ui.scope_builder(
+            UiBuilder::new()
+                .max_rect(inside)
+                .layout(UiLayout::left_to_right(Align::Center)),
+            |ui| view.tab_editor_ui(ui, pane, payload),
+        );
     }
 
     /// A `+` on a filled disc, at the end of the strip.

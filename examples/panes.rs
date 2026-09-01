@@ -95,6 +95,8 @@ impl eframe::App for Demo {
                     };
                     self.layout.add_pane(frame, note, None);
                 }
+                // The example's notes are named by their number, and stay named by it.
+                FramesEvent::TabDoubleClicked(_) => {}
             }
         }
 
