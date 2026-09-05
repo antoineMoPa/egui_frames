@@ -194,7 +194,10 @@ impl<P> Layout<P> {
     /// The top-left frame, whose tab strip is the one an application usually hangs its own
     /// controls off.
     pub fn primary_frame(&self) -> FrameId {
-        self.frame_ids().first().copied().unwrap_or(self.active_frame)
+        self.frame_ids()
+            .first()
+            .copied()
+            .unwrap_or(self.active_frame)
     }
 
     /// The frame the keyboard is talking to.
@@ -308,7 +311,9 @@ impl<P> Layout<P> {
         let frame_ids = self.frame_ids();
         !frame_ids.is_empty()
             && frame_ids.len() == self.frames.len()
-            && frame_ids.iter().all(|frame| self.frames.contains_key(frame))
+            && frame_ids
+                .iter()
+                .all(|frame| self.frames.contains_key(frame))
             && self.frames.contains_key(&self.active_frame)
             && self
                 .frames
@@ -512,7 +517,10 @@ impl<P> Layout<P> {
         let Some(source) = self.frame_of(pane) else {
             return;
         };
-        let source_pane_count = self.frames.get(&source).map_or(0, |frame| frame.panes.len());
+        let source_pane_count = self
+            .frames
+            .get(&source)
+            .map_or(0, |frame| frame.panes.len());
 
         if side == DropSide::Tabs {
             if source == frame {
@@ -870,7 +878,11 @@ mod tests {
         else {
             panic!("expected the workspace to be split");
         };
-        assert_eq!(*direction, SplitDirection::Row, "the column runs down the side");
+        assert_eq!(
+            *direction,
+            SplitDirection::Row,
+            "the column runs down the side"
+        );
         assert_eq!(children.len(), 2);
         let LayoutNode::Frame { frame: column } = &children[1] else {
             panic!("expected the new column to be one frame");
@@ -904,7 +916,10 @@ mod tests {
 
         layout.add_pane_against_edge(DropSide::Right, DEFAULT_EDGE_SHARE, "second shell");
 
-        let LayoutNode::Split { sizes, children, .. } = layout.root() else {
+        let LayoutNode::Split {
+            sizes, children, ..
+        } = layout.root()
+        else {
             panic!("expected the root to be a split");
         };
         assert_eq!(children.len(), 3);
@@ -967,7 +982,11 @@ mod tests {
             layout.frame(column).expect("expected the column").panes(),
             [first, moving, second]
         );
-        assert_eq!(layout.frame_ids().len(), 1, "the emptied frame went with it");
+        assert_eq!(
+            layout.frame_ids().len(),
+            1,
+            "the emptied frame went with it"
+        );
     }
 
     /// A move is not a close and an open: applications key their own state on a pane's name,
@@ -984,7 +1003,9 @@ mod tests {
         layout.move_pane_against_edge(shell, DropSide::Bottom, DEFAULT_EDGE_SHARE);
         assert!(layout.contains(shell), "and after a move against the edge");
 
-        let review_frame = layout.frame_of(pane_of(&layout, "review")).expect("a frame");
+        let review_frame = layout
+            .frame_of(pane_of(&layout, "review"))
+            .expect("a frame");
         layout.move_pane_to_frame(shell, review_frame, DropSide::Tabs, None);
         assert!(layout.contains(shell), "and after joining another strip");
         assert_eq!(layout.pane_count(), 2, "and there is still only one of it");
@@ -1079,7 +1100,11 @@ mod tests {
 
         layout.drop_empty_frames();
 
-        assert_eq!(layout.frame_ids().len(), 1, "a workspace needs a drop target");
+        assert_eq!(
+            layout.frame_ids().len(),
+            1,
+            "a workspace needs a drop target"
+        );
     }
 
     /// A restored arrangement carries on naming things where the stored one left off: a name

@@ -138,7 +138,12 @@ fn clicking_a_tab_brings_it_to_the_front() {
     let (workspace, mut harness, panes) = workspace(&["review", "shell"]);
     harness.run();
     assert_eq!(
-        workspace.lock().unwrap().layout.active_pane().map(|(id, _)| id),
+        workspace
+            .lock()
+            .unwrap()
+            .layout
+            .active_pane()
+            .map(|(id, _)| id),
         Some(panes[1]),
         "the pane opened last starts in front"
     );
@@ -154,7 +159,10 @@ fn clicking_a_tab_brings_it_to_the_front() {
         Some(panes[0]),
         "clicking a tab is what brings its pane forward"
     );
-    assert!(state.events.is_empty(), "and asks nothing of the application");
+    assert!(
+        state.events.is_empty(),
+        "and asks nothing of the application"
+    );
 }
 
 /// The gesture the whole widget exists for: a tab dragged out of a strip and dropped against
@@ -177,7 +185,10 @@ fn dragging_a_tab_to_a_frames_edge_splits_the_frame() {
 
     press(&mut harness, from, true);
     for at in [from + egui::vec2(30.0, 20.0), to] {
-        harness.input_mut().events.push(egui::Event::PointerMoved(at));
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(at));
         harness.step();
     }
     press(&mut harness, to, false);
@@ -185,7 +196,11 @@ fn dragging_a_tab_to_a_frames_edge_splits_the_frame() {
 
     let state = workspace.lock().unwrap();
     assert_eq!(state.layout.frame_count(), 2, "the frame was split in two");
-    assert_eq!(state.layout.pane_count(), 2, "and nothing was lost doing it");
+    assert_eq!(
+        state.layout.pane_count(),
+        2,
+        "and nothing was lost doing it"
+    );
     assert!(
         state.layout.contains(panes[1]),
         "a dragged pane keeps the name it was known by"
@@ -222,7 +237,10 @@ fn dropping_a_tab_on_another_frames_heading_joins_that_frames_tabs() {
     let to = egui::pos2(frame_rect.max.x - 12.0, frame_rect.center().y);
     press(&mut harness, from, true);
     for at in [from + egui::vec2(30.0, 20.0), to] {
-        harness.input_mut().events.push(egui::Event::PointerMoved(at));
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(at));
         harness.step();
     }
     press(&mut harness, to, false);
@@ -251,7 +269,10 @@ fn dropping_a_tab_on_another_frames_heading_joins_that_frames_tabs() {
     let from = tab_center(&workspace, panes[1]);
     press(&mut harness, from, true);
     for at in [from + egui::vec2(-30.0, 6.0), heading] {
-        harness.input_mut().events.push(egui::Event::PointerMoved(at));
+        harness
+            .input_mut()
+            .events
+            .push(egui::Event::PointerMoved(at));
         harness.step();
     }
     press(&mut harness, heading, false);
@@ -282,7 +303,10 @@ fn a_tab_dropped_outside_the_workspace_stays_where_it_was() {
     let from = tab_center(&workspace, panes[1]);
     let outside = egui::pos2(4000.0, 4000.0);
     press(&mut harness, from, true);
-    harness.input_mut().events.push(egui::Event::PointerMoved(outside));
+    harness
+        .input_mut()
+        .events
+        .push(egui::Event::PointerMoved(outside));
     harness.step();
     press(&mut harness, outside, false);
     harness.run();
@@ -465,7 +489,11 @@ fn double_clicking_a_tab_tells_the_application() {
         "the second click of a double is reported as one"
     );
     assert_eq!(
-        state.layout.frame(state.layout.active_frame()).unwrap().active_pane(),
+        state
+            .layout
+            .frame(state.layout.active_frame())
+            .unwrap()
+            .active_pane(),
         Some(panes[1]),
         "and the first of the two has already brought the pane forward"
     );

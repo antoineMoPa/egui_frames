@@ -75,7 +75,5 @@ mod style;
 
 pub use frames::{Frames, FramesEvent, PaneView, Tab};
 pub use id::{FrameId, PaneId};
-pub use layout::{
-    DEFAULT_EDGE_SHARE, DropSide, Frame, Layout, LayoutNode, SplitDirection,
-};
+pub use layout::{DEFAULT_EDGE_SHARE, DropSide, Frame, Layout, LayoutNode, SplitDirection};
 pub use style::FramesStyle;

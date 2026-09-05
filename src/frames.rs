@@ -510,7 +510,8 @@ impl Frames {
         // frame has nothing to tell it apart from, so it wears the ordinary border.
         let marked_active = is_active && layout.frame_count() > 1;
         let radius = self.style.corner_radius;
-        ui.painter().rect_filled(rect, radius, self.style.frame_fill);
+        ui.painter()
+            .rect_filled(rect, radius, self.style.frame_fill);
         ui.painter().rect_stroke(
             rect,
             radius,
@@ -637,9 +638,7 @@ impl Frames {
                     // no room for one, and the wheel is how the strip says it scrolls.
                     egui::ScrollArea::horizontal()
                         .id_salt(self.salt.with(("tab-scroll", frame)))
-                        .scroll_bar_visibility(
-                            egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
-                        )
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 // What a tab's place is measured against, so a strip that
@@ -683,9 +682,15 @@ impl Frames {
                 if tab.editing {
                     return style.max_tab_width;
                 }
-                cut_to_fit(ui, &tab.title, style.font.clone(), style.text, f32::INFINITY)
-                    .size()
-                    .x
+                cut_to_fit(
+                    ui,
+                    &tab.title,
+                    style.font.clone(),
+                    style.text,
+                    f32::INFINITY,
+                )
+                .size()
+                .x
             })
             .collect();
         // What the strip spends beside the titles: each tab's insets, marker, indicator and
@@ -839,9 +844,15 @@ impl Frames {
             title_width,
             TAB_SLIDE,
         );
-        let full = cut_to_fit(ui, &tab.title, style.font.clone(), style.text, f32::INFINITY)
-            .size()
-            .x;
+        let full = cut_to_fit(
+            ui,
+            &tab.title,
+            style.font.clone(),
+            style.text,
+            f32::INFINITY,
+        )
+        .size()
+        .x;
         let galley = cut_to_fit(
             ui,
             &tab.title,
@@ -851,7 +862,11 @@ impl Frames {
             } else {
                 style.inactive_text
             },
-            if granted >= full { f32::INFINITY } else { granted },
+            if granted >= full {
+                f32::INFINITY
+            } else {
+                granted
+            },
         );
         let marker_space = if tab.marker { TAB_MARKER_SPACE } else { 0.0 };
         let close_space = if tab.closable {
@@ -1029,10 +1044,8 @@ impl Frames {
         title_width: f32,
     ) {
         let style = &self.style;
-        let (_, rect) = ui.allocate_space(vec2(
-            title_width + TAB_TEXT_INSET * 2.0,
-            style.tab_height,
-        ));
+        let (_, rect) =
+            ui.allocate_space(vec2(title_width + TAB_TEXT_INSET * 2.0, style.tab_height));
         self.tab_rects.push((frame, pane, rect));
         if !ui.is_rect_visible(rect) {
             return;
@@ -1087,7 +1100,10 @@ impl Frames {
     fn pane_body(&self, rect: Rect) -> Rect {
         let inset = FRAME_BORDER + 1.0;
         Rect::from_min_max(
-            pos2(rect.min.x + inset, rect.min.y + self.style.tab_strip_height()),
+            pos2(
+                rect.min.x + inset,
+                rect.min.y + self.style.tab_strip_height(),
+            ),
             pos2(rect.max.x - inset, rect.max.y - inset),
         )
     }
@@ -1103,7 +1119,11 @@ impl Frames {
         count: usize,
     ) -> (Vec<Rect>, f32) {
         let horizontal = direction == SplitDirection::Row;
-        let total = if horizontal { rect.width() } else { rect.height() };
+        let total = if horizontal {
+            rect.width()
+        } else {
+            rect.height()
+        };
         let gaps = self.style.divider_thickness * count.saturating_sub(1) as f32;
         let usable = (total - gaps).max(1.0);
         let even = 1.0 / count.max(1) as f32;
@@ -1226,8 +1246,6 @@ impl Frames {
             .iter()
             .any(|(_, rect)| self.strip_rect_of(*rect).contains(at))
     }
-
-
 
     /// The band down the edge of everything, shown while a dragged tab is over it.
     fn draw_workspace_drop_hint<P>(&self, ui: &mut Ui, layout: &Layout<P>) {
@@ -1471,16 +1489,16 @@ mod tests {
     /// overflow is the scroll area's to deal with.
     #[test]
     fn a_crowded_strip_keeps_the_guaranteed_width() {
-        assert_eq!(shared_title_cap(&[500.0, 500.0, 500.0], 300.0, 170.0), 170.0);
+        assert_eq!(
+            shared_title_cap(&[500.0, 500.0, 500.0], 300.0, 170.0),
+            170.0
+        );
     }
 
     fn frame_of(width: f32, height: f32) -> (Frames, Rect, Rect) {
         let frames = Frames::new();
         let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(width, height));
-        let strip = Rect::from_min_size(
-            rect.min,
-            vec2(width, frames.style().tab_strip_height()),
-        );
+        let strip = Rect::from_min_size(rect.min, vec2(width, frames.style().tab_strip_height()));
         (frames, rect, strip)
     }
 
@@ -1514,13 +1532,19 @@ mod tests {
     #[test]
     fn dropping_on_the_tab_strip_joins_its_tabs() {
         let (_, rect, strip) = frame_of(400.0, 300.0);
-        assert_eq!(drop_side(rect, strip, pos2(200.0, 10.0)), Some(DropSide::Tabs));
+        assert_eq!(
+            drop_side(rect, strip, pos2(200.0, 10.0)),
+            Some(DropSide::Tabs)
+        );
     }
 
     #[test]
     fn dropping_near_an_edge_splits_on_that_side() {
         let (_, rect, strip) = frame_of(400.0, 300.0);
-        assert_eq!(drop_side(rect, strip, pos2(10.0, 150.0)), Some(DropSide::Left));
+        assert_eq!(
+            drop_side(rect, strip, pos2(10.0, 150.0)),
+            Some(DropSide::Left)
+        );
         assert_eq!(
             drop_side(rect, strip, pos2(390.0, 150.0)),
             Some(DropSide::Right)
@@ -1622,7 +1646,10 @@ mod tests {
         let tab = |x: f32| Rect::from_min_size(pos2(x, 0.0), vec2(100.0, 18.0));
 
         frames.dragging = Some(dragged);
-        frames.frame_rects = vec![(here, Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0)))];
+        frames.frame_rects = vec![(
+            here,
+            Rect::from_min_size(pos2(0.0, 0.0), vec2(600.0, 400.0)),
+        )];
         frames.tab_rects = vec![
             (here, dragged, tab(0.0)),
             (here, b, tab(110.0)),
