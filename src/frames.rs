@@ -119,7 +119,8 @@ pub trait PaneView<P> {
 /// [`Frames::show`] returns. These are the requests only the application can answer.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FramesEvent {
-    /// A tab's close mark was clicked, or it was middle-clicked.
+    /// A tab's close mark was clicked, it was middle-clicked, or "close tab" was picked on
+    /// the menu a right click on it opens.
     ///
     /// Nothing has closed yet: an application that has to ask first — a file with unsaved
     /// edits — can put the question up instead, and call [`Layout::close_pane`] when it has an
@@ -132,6 +133,13 @@ pub enum FramesEvent {
     /// the front; what the second asks for is the application's business — opening the title
     /// for renaming, say, by handing back a [`Tab`] that is [`Tab::editing`].
     TabDoubleClicked(PaneId),
+    /// "close other tabs" was picked on a tab's menu — the one a right click on the tab
+    /// opens: the user wants its frame cleared down to this one tab.
+    ///
+    /// Nothing has closed, for the same reason as [`Self::PaneCloseRequested`]: which of the
+    /// frame's other tabs can go — and which has to ask first — is the application's to
+    /// decide, one tab at a time, with [`Layout::frame`] saying which tabs those are.
+    OtherTabsCloseRequested(PaneId),
 }
 
 /// How close to the outer edge of the whole arrangement a dropped tab has to land to become a
@@ -1011,6 +1019,23 @@ impl Frames {
         }
         if response.clicked() {
             layout.focus_pane(pane);
+        }
+        // A right click opens a small menu of what can be done to the tab. A menu rather than
+        // a chorded click for closing the others: a strip of tabs is easy to clear by mistake
+        // with a modifier held, and a word to read first is what stops that.
+        if tab.closable {
+            egui::Popup::context_menu(&response)
+                .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+                .show(|ui| {
+                    if ui.button("close tab").clicked() {
+                        events.push(FramesEvent::PaneCloseRequested(pane));
+                        ui.close();
+                    }
+                    if ui.button("close other tabs").clicked() {
+                        events.push(FramesEvent::OtherTabsCloseRequested(pane));
+                        ui.close();
+                    }
+                });
         }
         if response.double_clicked() {
             events.push(FramesEvent::TabDoubleClicked(pane));

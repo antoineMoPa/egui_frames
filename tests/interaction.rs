@@ -133,6 +133,23 @@ fn press(harness: &mut Harness<'_>, at: egui::Pos2, pressed: bool) {
     harness.step();
 }
 
+/// A right click, down and up in one go, which is what opens a tab's menu.
+fn right_click(harness: &mut Harness<'_>, at: egui::Pos2) {
+    for pressed in [true, false] {
+        harness.input_mut().events.extend([
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        harness.step();
+    }
+    harness.run();
+}
+
 #[test]
 fn clicking_a_tab_brings_it_to_the_front() {
     let (workspace, mut harness, panes) = workspace(&["review", "shell"]);
@@ -463,6 +480,54 @@ fn a_close_mark_in_an_inactive_frame_closes_on_the_first_click() {
         state.events,
         vec![FramesEvent::PaneCloseRequested(aside)],
         "the tab whose close mark was pressed is the one asked to close"
+    );
+}
+
+/// A right click on a tab opens its menu, and "close other tabs" on it asks the application
+/// to close the frame's others; none has closed, since each may have something to ask first.
+#[test]
+fn a_tabs_menu_asks_the_application_to_close_the_others() {
+    let (workspace, mut harness, panes) = workspace(&["review", "shell", "notes"]);
+    harness.run();
+
+    let at = tab_center(&workspace, panes[1]);
+    right_click(&mut harness, at);
+    let item = harness.get_by_label("close other tabs").rect().center();
+    // Read straight after the release: the workspace keeps the events of the last frame
+    // drawn, and the click is reported on the frame the button comes up.
+    press(&mut harness, item, true);
+    press(&mut harness, item, false);
+
+    let state = workspace.lock().unwrap();
+    assert_eq!(
+        state.events,
+        vec![FramesEvent::OtherTabsCloseRequested(panes[1])],
+        "the tab whose menu it was is the one kept"
+    );
+    assert_eq!(
+        state.layout.pane_count(),
+        3,
+        "nothing closed behind the application's back"
+    );
+}
+
+/// The same menu closes the tab itself, the way its close mark does.
+#[test]
+fn a_tabs_menu_asks_the_application_to_close_it() {
+    let (workspace, mut harness, panes) = workspace(&["review", "shell"]);
+    harness.run();
+
+    right_click(&mut harness, tab_center(&workspace, panes[0]));
+    let item = harness.get_by_label("close tab").rect().center();
+    // Read straight after the release: the workspace keeps the events of the last frame
+    // drawn, and the click is reported on the frame the button comes up.
+    press(&mut harness, item, true);
+    press(&mut harness, item, false);
+
+    let state = workspace.lock().unwrap();
+    assert_eq!(
+        state.events,
+        vec![FramesEvent::PaneCloseRequested(panes[0])]
     );
 }
 

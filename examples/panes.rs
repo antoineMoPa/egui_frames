@@ -97,6 +97,21 @@ impl eframe::App for Demo {
                 }
                 // The example's notes are named by their number, and stay named by it.
                 FramesEvent::TabDoubleClicked(_) => {}
+                FramesEvent::OtherTabsCloseRequested(kept) => {
+                    let frame = self.layout.frame_of(kept).expect("the tab is in a frame");
+                    let others: Vec<_> = self
+                        .layout
+                        .frame(frame)
+                        .expect("that frame is drawn")
+                        .panes()
+                        .iter()
+                        .copied()
+                        .filter(|pane| *pane != kept)
+                        .collect();
+                    for pane in others {
+                        self.layout.close_pane(pane);
+                    }
+                }
             }
         }
 

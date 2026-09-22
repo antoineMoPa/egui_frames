@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+A right click on a closable tab opens a small menu: "close tab", which asks the same as its
+close mark, and "close other tabs", which reports `FramesEvent::OtherTabsCloseRequested` —
+the user wants the frame cleared down to that one tab, and the application closes the others
+the way it closes any tab, asking first where it has to.
+
 ## 0.3.0
 
 A tab can be edited in place: a `Tab` that is `editing` is drawn as whatever
