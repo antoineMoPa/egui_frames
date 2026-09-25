@@ -3,6 +3,8 @@
 //! [`Layout`] owns what the arrangement *is*; this owns how it is drawn and how pointer
 //! gestures turn into the next arrangement.
 
+use std::collections::HashMap;
+
 use egui::{
     Align, Color32, CornerRadius, CursorIcon, Id, LayerId, Layout as UiLayout, Order, Pos2, Rect,
     Response, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2,
@@ -221,6 +223,14 @@ pub struct Frames {
     frame_rects: Vec<(FrameId, Rect)>,
     tab_rects: Vec<(FrameId, PaneId, Rect)>,
     pane_rects: Vec<(PaneId, Rect)>,
+    /// The tab each strip last scrolled into view, which is the one in front of that frame.
+    /// A tab brought to the front - opened, or picked from a menu - is scrolled to once, so
+    /// it is not left off the end of a narrow strip, and a strip scrolled by hand afterwards
+    /// stays where it was put.
+    scrolled_to: HashMap<FrameId, PaneId>,
+    /// Where a strip is to be scrolled to on the frame after a tab came forward in it - see
+    /// `scrolled_to`.
+    strip_offsets: HashMap<FrameId, f32>,
 }
 
 impl Default for Frames {
@@ -246,6 +256,8 @@ impl Frames {
             frame_rects: Vec::new(),
             tab_rects: Vec::new(),
             pane_rects: Vec::new(),
+            scrolled_to: HashMap::new(),
+            strip_offsets: HashMap::new(),
         }
     }
 
@@ -644,31 +656,49 @@ impl Frames {
                     // More tabs than the strip has room for scroll sideways under the
                     // trackpad rather than vanish off the end. No bar is drawn: a strip has
                     // no room for one, and the wheel is how the strip says it scrolls.
-                    egui::ScrollArea::horizontal()
+                    let mut strip = egui::ScrollArea::horizontal()
                         .id_salt(self.salt.with(("tab-scroll", frame)))
-                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                        .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                // What a tab's place is measured against, so a strip that
-                                // has been moved, resized or scrolled is not read as every
-                                // tab in it having moved.
-                                let origin = ui.min_rect().left();
-                                for ((pane, tab), title_width) in tabs.iter().zip(titles) {
-                                    self.draw_tab(
-                                        ui,
-                                        layout,
-                                        view,
-                                        events,
-                                        frame,
-                                        *pane,
-                                        tab,
-                                        active == Some(*pane),
-                                        origin,
-                                        title_width,
-                                    );
-                                }
-                            });
+                        .scroll_bar_visibility(
+                            egui::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                        );
+                    if let Some(offset) = self.strip_offsets.remove(&frame) {
+                        strip = strip.horizontal_scroll_offset(offset);
+                    }
+                    let mut brought_forward = None;
+                    let shown = strip.show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            // What a tab's place is measured against, so a strip that
+                            // has been moved, resized or scrolled is not read as every
+                            // tab in it having moved.
+                            let origin = ui.min_rect().left();
+                            for ((pane, tab), title_width) in tabs.iter().zip(titles) {
+                                brought_forward = brought_forward.or(self.draw_tab(
+                                    ui,
+                                    layout,
+                                    view,
+                                    events,
+                                    frame,
+                                    *pane,
+                                    tab,
+                                    active == Some(*pane),
+                                    origin,
+                                    title_width,
+                                ));
+                            }
                         });
+                    });
+                    // Set on the strip directly rather than asked of whatever scroll area
+                    // holds the tab: a request to bring a rect into view is heard by every
+                    // scroll area around it, and the pane's own would jump to its top.
+                    if let Some(drawn) = brought_forward {
+                        let seen =
+                            shown.state.offset.x..=shown.state.offset.x + shown.inner_rect.width();
+                        let offset = strip_offset_showing(drawn, seen);
+                        if offset != shown.state.offset.x {
+                            self.strip_offsets.insert(frame, offset);
+                            ui.ctx().request_repaint();
+                        }
+                    }
                 });
             });
         });
@@ -773,7 +803,7 @@ impl Frames {
         selected: bool,
         origin: f32,
         title_width: f32,
-    ) {
+    ) -> Option<egui::Rangef> {
         let id = self.salt.with(("tab-slide", pane));
         let belongs_at = ui.cursor().left() - origin;
         let drawn_at = if self.dragging == Some(pane) {
@@ -783,6 +813,11 @@ impl Frames {
         };
         let offset = drawn_at - belongs_at;
 
+        // A tab come to the front of its frame is scrolled into view once, so on a narrow strip
+        // the tab just opened is not left past the end with its close mark out of reach. The
+        // strip is scrolled by whoever holds it, from the range this answers.
+        let starts_at = ui.cursor().left();
+        let brought_forward = selected && self.scrolled_to.get(&frame) != Some(&pane);
         if offset.abs() < 0.5 {
             self.draw_tab_body(
                 ui,
@@ -795,32 +830,37 @@ impl Frames {
                 selected,
                 title_width,
             );
-            return;
-        }
-
-        // Drawn into a layer of its own so the shapes can be moved once they are made — the
-        // same way the dragged tab is. Its clip is moved the other way first, so a tab on its
-        // way between two places is still cut off at the strip it is in.
-        let layer_id = LayerId::new(Order::Middle, id.with("sliding"));
-        let clip = ui.clip_rect();
-        ui.scope_builder(UiBuilder::new().layer_id(layer_id), |ui| {
-            ui.set_clip_rect(clip.translate(vec2(-offset, 0.0)));
-            self.draw_tab_body(
-                ui,
-                layout,
-                view,
-                events,
-                frame,
-                pane,
-                tab,
-                selected,
-                title_width,
+        } else {
+            // Drawn into a layer of its own so the shapes can be moved once they are made — the
+            // same way the dragged tab is. Its clip is moved the other way first, so a tab on its
+            // way between two places is still cut off at the strip it is in.
+            let layer_id = LayerId::new(Order::Middle, id.with("sliding"));
+            let clip = ui.clip_rect();
+            ui.scope_builder(UiBuilder::new().layer_id(layer_id), |ui| {
+                ui.set_clip_rect(clip.translate(vec2(-offset, 0.0)));
+                self.draw_tab_body(
+                    ui,
+                    layout,
+                    view,
+                    events,
+                    frame,
+                    pane,
+                    tab,
+                    selected,
+                    title_width,
+                );
+            });
+            ui.ctx().transform_layer_shapes(
+                layer_id,
+                egui::emath::TSTransform::from_translation(vec2(offset, 0.0)),
             );
-        });
-        ui.ctx().transform_layer_shapes(
-            layer_id,
-            egui::emath::TSTransform::from_translation(vec2(offset, 0.0)),
-        );
+        }
+        // Where it was drawn along the strip, measured from its start the way a strip's
+        // scroll offset is.
+        brought_forward.then(|| {
+            self.scrolled_to.insert(frame, pane);
+            egui::Rangef::new(starts_at - origin, ui.cursor().left() - origin)
+        })
     }
 
     #[allow(
@@ -1451,6 +1491,19 @@ fn draw_close_mark(painter: &egui::Painter, center: Pos2, ink: Color32) {
 /// keeps what it wants, and the width it leaves unused is split over the longer ones. When
 /// everything fits there is no cap at all. The cap never drops below `floor` — a strip too
 /// crowded to give every title that much scrolls instead.
+/// The scroll offset that brings a tab drawn over `drawn` into a strip showing `seen`, moving
+/// the strip no further than that takes - both measured from the start of the strip.
+fn strip_offset_showing(drawn: egui::Rangef, seen: std::ops::RangeInclusive<f32>) -> f32 {
+    let (from, to) = (*seen.start(), *seen.end());
+    if drawn.max > to {
+        (from + drawn.max - to).min(drawn.min)
+    } else if drawn.min < from {
+        drawn.min
+    } else {
+        from
+    }
+}
+
 fn shared_title_cap(wanted: &[f32], room: f32, floor: f32) -> f32 {
     let mut sorted = wanted.to_vec();
     sorted.sort_by(f32::total_cmp);

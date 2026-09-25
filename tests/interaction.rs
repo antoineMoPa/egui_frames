@@ -594,3 +594,29 @@ fn an_editing_tab_is_drawn_as_the_applications_editor() {
         "the editor takes the tab's place, widened to hold what is typed: {before:?} -> {editing:?}"
     );
 }
+
+/// A tab opened into a strip too narrow for all of them is scrolled into view, so the tab
+/// just opened - and the close mark on it - is not left past the end of the strip.
+#[test]
+fn a_tab_opened_past_the_end_of_a_narrow_strip_is_scrolled_into_view() {
+    let names: Vec<String> = (0..12).map(|at| format!("a tab named {at}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let (workspace, mut harness, _) = workspace(&names);
+    harness.set_size(egui::vec2(390.0, 600.0));
+    harness.run_steps(2);
+
+    let opened = {
+        let mut state = workspace.lock().expect("expected the workspace");
+        let frame = state.layout.active_frame();
+        state.layout.add_pane(frame, "just opened".to_string(), None)
+    };
+    harness.run_steps(4);
+
+    let state = workspace.lock().expect("expected the workspace");
+    let tab = state.frames.tab_rect(opened).expect("expected the tab drawn");
+    assert!(
+        tab.right() <= 390.0,
+        "the tab just opened should be on screen, but ends at {}",
+        tab.right()
+    );
+}
