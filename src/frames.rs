@@ -162,7 +162,6 @@ const TAB_SLIDE: f32 = 0.12;
 
 /// Space between the end of a tab's title and its close mark.
 const TAB_CLOSE_GAP: f32 = 5.0;
-const TAB_CLOSE_SIZE: f32 = 12.0;
 const TAB_CLOSE_INSET: f32 = 4.0;
 /// Where a tab's title starts.
 const TAB_TEXT_INSET: f32 = 8.0;
@@ -633,7 +632,7 @@ impl Frames {
             };
             let panes = self.tabs_in_drawn_order(frame, open.panes());
             let active = open.active_pane();
-            let tabs: Vec<(PaneId, Tab)> = panes
+            let mut tabs: Vec<(PaneId, Tab)> = panes
                 .into_iter()
                 .filter_map(|pane| {
                     layout
@@ -641,6 +640,9 @@ impl Frames {
                         .map(|payload| (pane, view.tab(pane, payload)))
                 })
                 .collect();
+            if self.style.only_front_tab {
+                tabs.retain(|(pane, _)| active == Some(*pane));
+            }
 
             // Right to left first: the application's own controls take the outer edge and the
             // new-tab button sits inside them, so both stay on screen however many tabs there
@@ -653,6 +655,17 @@ impl Frames {
 
                 ui.with_layout(UiLayout::left_to_right(Align::Center), |ui| {
                     let titles = self.title_widths(ui, &tabs);
+                    if self.style.only_front_tab {
+                        // One tab across what the controls left, with nothing to scroll.
+                        let origin = ui.min_rect().left();
+                        for ((pane, tab), title_width) in tabs.iter().zip(titles) {
+                            self.draw_tab(
+                                ui, layout, view, events, frame, *pane, tab, true, origin,
+                                title_width,
+                            );
+                        }
+                        return;
+                    }
                     // More tabs than the strip has room for scroll sideways under the
                     // trackpad rather than vanish off the end. No bar is drawn: a strip has
                     // no room for one, and the wheel is how the strip says it scrolls.
@@ -742,7 +755,7 @@ impl Frames {
                 }
                 let marker = if tab.marker { TAB_MARKER_SPACE } else { 0.0 };
                 let close = if tab.closable {
-                    TAB_CLOSE_GAP + TAB_CLOSE_SIZE + TAB_CLOSE_INSET
+                    TAB_CLOSE_GAP + style.close_size + TAB_CLOSE_INSET
                 } else {
                     TAB_TEXT_INSET
                 };
@@ -918,7 +931,7 @@ impl Frames {
         );
         let marker_space = if tab.marker { TAB_MARKER_SPACE } else { 0.0 };
         let close_space = if tab.closable {
-            TAB_CLOSE_GAP + TAB_CLOSE_SIZE + TAB_CLOSE_INSET
+            TAB_CLOSE_GAP + style.close_size + TAB_CLOSE_INSET
         } else {
             TAB_TEXT_INSET
         };
@@ -936,7 +949,11 @@ impl Frames {
         let indicator_space = indicator
             .as_ref()
             .map_or(0.0, |galley| TAB_INDICATOR_GAP + galley.size().x);
-        let width = galley.size().x + marker_space + indicator_space + TAB_TEXT_INSET + close_space;
+        let width = if style.only_front_tab {
+            ui.available_width()
+        } else {
+            galley.size().x + marker_space + indicator_space + TAB_TEXT_INSET + close_space
+        };
         // The tab answers to an id of its own rather than to one counted out of the order it
         // was drawn in: a tab on its way to a new place is drawn from a layer of its own, and
         // a counted id would change the moment it set off — which egui reads as the widget
@@ -1021,10 +1038,10 @@ impl Frames {
 
             let close_rect = Rect::from_center_size(
                 pos2(
-                    rect.max.x - TAB_CLOSE_INSET - TAB_CLOSE_SIZE / 2.0,
+                    rect.max.x - TAB_CLOSE_INSET - style.close_size / 2.0,
                     rect.center().y,
                 ),
-                vec2(TAB_CLOSE_SIZE, TAB_CLOSE_SIZE),
+                vec2(style.close_size, style.close_size),
             );
             let hovering_close =
                 tab.closable && !dragging_this && pointer.is_some_and(|at| close_rect.contains(at));
@@ -1037,6 +1054,7 @@ impl Frames {
                 draw_close_mark(
                     &painter,
                     close_rect.center(),
+                    style.close_size,
                     if hovering_close {
                         style.close_hover
                     } else {
@@ -1471,9 +1489,9 @@ fn drop_side(rect: Rect, strip_rect: Rect, at: Pos2) -> Option<DropSide> {
 }
 
 /// A tab's close mark: two thin strokes, the size of the text beside them.
-fn draw_close_mark(painter: &egui::Painter, center: Pos2, ink: Color32) {
-    let reach = TAB_CLOSE_SIZE * 0.27;
-    let stroke = Stroke::new(1.0, ink);
+fn draw_close_mark(painter: &egui::Painter, center: Pos2, size: f32, ink: Color32) {
+    let reach = size * 0.27;
+    let stroke = Stroke::new((size / 12.0).max(1.0), ink);
     painter.line_segment(
         [center + vec2(-reach, -reach), center + vec2(reach, reach)],
         stroke,

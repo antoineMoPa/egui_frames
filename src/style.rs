@@ -34,6 +34,11 @@ pub struct FramesStyle {
     /// with room to spare lets its titles grow past this until nothing is cut; a strip too
     /// crowded to give every title this much scrolls instead.
     pub max_tab_width: f32,
+    /// How big a tab's close mark is, and so how big a target for a thumb.
+    pub close_size: f32,
+    /// Draw only the tab in front, across the whole strip, and none of the others - for a
+    /// window too narrow for a row of tabs, whose application lists them some other way.
+    pub only_front_tab: bool,
     /// The height of a tab, which sets the height of the strip with it.
     pub tab_height: f32,
     /// The gap between the tabs and the edges of the strip, on all four sides.
@@ -68,6 +73,8 @@ impl FramesStyle {
             close_hover: visuals.error_fg_color,
             font: FontId::proportional(12.0),
             max_tab_width: 170.0,
+            close_size: 12.0,
+            only_front_tab: false,
             tab_height: 18.0,
             tab_margin: 4.0,
             tab_gap: 3.0,
