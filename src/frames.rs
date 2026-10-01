@@ -109,6 +109,12 @@ pub trait PaneView<P> {
     /// tab is closed. The default draws nothing.
     fn empty_frame_ui(&mut self, _ui: &mut Ui, _frame: FrameId) {}
 
+    /// Draw whatever the application wants at the left-hand end of a tab strip, before its first
+    /// tab - room for the window's traffic lights on a window that has no title bar of its own,
+    /// say. `primary` marks the top-left frame, as in [`Self::tab_strip_end`]. The default
+    /// draws nothing.
+    fn tab_strip_start(&mut self, _ui: &mut Ui, _frame: FrameId, _primary: bool) {}
+
     /// Draw whatever the application wants at the right-hand end of a tab strip, outside the
     /// new-tab button. `primary` marks the top-left frame, whose strip is the natural home for
     /// window-wide controls. The default draws nothing.
@@ -643,6 +649,8 @@ impl Frames {
             if self.style.only_front_tab {
                 tabs.retain(|(pane, _)| active == Some(*pane));
             }
+
+            view.tab_strip_start(ui, frame, is_primary);
 
             // Right to left first: the application's own controls take the outer edge and the
             // new-tab button sits inside them, so both stay on screen however many tabs there
