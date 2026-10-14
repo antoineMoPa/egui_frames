@@ -288,6 +288,12 @@ impl Frames {
         self
     }
 
+    /// The same, to change on an arrangement already built - for an application whose new tab
+    /// means nothing in some of its states.
+    pub fn set_new_tab_button(&mut self, show: bool) {
+        self.new_tab_button = show;
+    }
+
     /// What sets this workspace's widgets apart from another's, for an application drawing more
     /// than one arrangement in the same context.
     #[must_use]
