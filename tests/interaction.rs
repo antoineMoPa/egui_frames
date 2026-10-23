@@ -608,12 +608,17 @@ fn a_tab_opened_past_the_end_of_a_narrow_strip_is_scrolled_into_view() {
     let opened = {
         let mut state = workspace.lock().expect("expected the workspace");
         let frame = state.layout.active_frame();
-        state.layout.add_pane(frame, "just opened".to_string(), None)
+        state
+            .layout
+            .add_pane(frame, "just opened".to_string(), None)
     };
     harness.run_steps(4);
 
     let state = workspace.lock().expect("expected the workspace");
-    let tab = state.frames.tab_rect(opened).expect("expected the tab drawn");
+    let tab = state
+        .frames
+        .tab_rect(opened)
+        .expect("expected the tab drawn");
     assert!(
         tab.right() <= 390.0,
         "the tab just opened should be on screen, but ends at {}",

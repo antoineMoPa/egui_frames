@@ -48,6 +48,8 @@
 //!                 FramesEvent::NewTabRequested(frame) => {
 //!                     layout.add_pane(frame, "untitled".to_string(), None);
 //!                 }
+//!                 FramesEvent::TabDoubleClicked(_)
+//!                 | FramesEvent::OtherTabsCloseRequested(_) => {}
 //!             }
 //!         }
 //!

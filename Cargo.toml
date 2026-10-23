@@ -2,7 +2,7 @@
 name = "egui_frames"
 version = "0.4.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 description = "Tabs, splits and draggable panes for egui"
 authors = ["Antoine M-P"]
 license = "MIT"

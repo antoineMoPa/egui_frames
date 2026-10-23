@@ -674,7 +674,15 @@ impl Frames {
                         let origin = ui.min_rect().left();
                         for ((pane, tab), title_width) in tabs.iter().zip(titles) {
                             self.draw_tab(
-                                ui, layout, view, events, frame, *pane, tab, true, origin,
+                                ui,
+                                layout,
+                                view,
+                                events,
+                                frame,
+                                *pane,
+                                tab,
+                                true,
+                                origin,
                                 title_width,
                             );
                         }
