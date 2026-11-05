@@ -592,7 +592,10 @@ impl Frames {
             Some(pane) => {
                 self.pane_rects.push((pane, body_rect));
                 if let Some(payload) = layout.pane(pane) {
-                    ui.scope_builder(UiBuilder::new().max_rect(body_rect), |ui| {
+                    let body = UiBuilder::new()
+                        .max_rect(body_rect)
+                        .id_salt(self.salt.with(("pane-body", pane)));
+                    ui.scope_builder(body, |ui| {
                         ui.set_clip_rect(body_rect);
                         view.pane_ui(ui, pane, payload);
                     });

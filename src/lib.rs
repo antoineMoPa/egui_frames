@@ -71,6 +71,8 @@
 #![warn(missing_docs, clippy::doc_markdown)]
 
 mod frames;
+#[cfg(test)]
+mod frames_tests;
 mod id;
 mod layout;
 mod style;
