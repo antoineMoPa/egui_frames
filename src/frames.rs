@@ -614,12 +614,22 @@ impl Frames {
         // This reads the pointer rather than registering a widget: a click-sensing widget the
         // size of the frame would sit on top of everything drawn inside it and swallow every
         // click meant for a tab or for the pane itself.
-        let pressed_inside = ui.input(|input| {
-            input.pointer.any_pressed()
-                && input
-                    .pointer
-                    .interact_pos()
-                    .is_some_and(|at| rect.contains(at))
+        //
+        // Only a press on the frames' own layer counts: one on a window, menu or modal floating
+        // above the frame - a pane's own popup, centered on the screen - is not a click in it.
+        let pressed_at = ui.input(|input| {
+            input
+                .pointer
+                .any_pressed()
+                .then(|| input.pointer.interact_pos())
+                .flatten()
+        });
+        let pressed_inside = pressed_at.is_some_and(|at| {
+            rect.contains(at)
+                && ui
+                    .ctx()
+                    .layer_id_at(at)
+                    .is_none_or(|layer| layer == ui.layer_id())
         });
         if pressed_inside && !is_active {
             layout.set_active_frame(frame);
